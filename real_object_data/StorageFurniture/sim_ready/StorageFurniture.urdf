@@ -1,0 +1,78 @@
+<?xml version='1.0' encoding='utf-8'?>
+<robot name="StorageFurniture">
+    <link name="world" />
+    <link name="Storagefurniture_body_part0">
+        <inertial>
+            <mass value="13026716611.424347" />
+            <inertia ixx="154314875923719.843750" iyy="155849618454895.531250" izz="194619803022033.500000" ixy="-760644873283.151611" ixz="-82343341589.080811" iyz="-2232162537206.598145" />
+        </inertial>
+        <visual>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Storagefurniture_body_part0.obj" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Storagefurniture_body_part0.obj" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Regular_drawer_part1_id0">
+        <inertial>
+            <mass value="5321501902.021163" />
+            <inertia ixx="46567574202942.953125" iyy="69859939502824.164062" izz="39645673670180.179688" ixy="0.000000" ixz="0.000000" iyz="0.000000" />
+        </inertial>
+        <visual>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Regular_drawer_part1_id0.obj" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Regular_drawer_part1_id0.obj" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Regular_drawer_part2_id0">
+        <inertial>
+            <mass value="5382918444.015949" />
+            <inertia ixx="49768339745400.148438" iyy="73960775658274.453125" izz="39776878425522.914062" ixy="0.000000" ixz="0.000000" iyz="0.000000" />
+        </inertial>
+        <visual>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Regular_drawer_part2_id0.obj" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Regular_drawer_part2_id0.obj" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="world_to_Storagefurniture_body_part0" type="fixed">
+        <parent link="world" />
+        <child link="Storagefurniture_body_part0" />
+        <origin xyz="0.000000 -0.000000 158.189909" rpy="1.570796 -0.000000 0.000000" />
+        <axis xyz="0.000000 0.000000 1.000000" />
+    </joint>
+    <joint name="Storagefurniture_body_part0_to_Regular_drawer_part1_id0" type="prismatic">
+        <parent link="Storagefurniture_body_part0" />
+        <child link="Regular_drawer_part1_id0" />
+        <origin xyz="-0.234043 54.491541 41.309230" rpy="-0.005703 -0.000000 -3.141593" />
+        <axis xyz="0.000000 0.000000 1.000000" />
+        <limit lower="-200.0" upper="0.0" effort="10" velocity="2" />
+    </joint>
+    <joint name="Storagefurniture_body_part0_to_Regular_drawer_part2_id0" type="prismatic">
+        <parent link="Storagefurniture_body_part0" />
+        <child link="Regular_drawer_part2_id0" />
+        <origin xyz="-1.244352 -69.912504 44.334096" rpy="0.022240 -0.000000 -3.141593" />
+        <axis xyz="0.000000 0.000000 1.000000" />
+        <limit lower="-200.0" upper="0.0" effort="10" velocity="2" />
+    </joint>
+</robot>

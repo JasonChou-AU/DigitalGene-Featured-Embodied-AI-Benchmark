@@ -1,0 +1,306 @@
+[
+  {
+    "category": "StorageFurniture",
+    "id": "StorageFurniture_drawer_clean_mtl",
+    "type": "mesh",
+    "conceptualization": [
+      {
+        "template": "Storagefurniture_body",
+        "parameters": {
+          "position": [
+            -20.701611,
+            -5.993088,
+            -124.37339
+          ],
+          "rotation": [
+            -2.467638,
+            0,
+            0.000003
+          ],
+          "size": [
+            301.029999,
+            301,
+            301
+          ],
+          "back_size": [
+            23
+          ],
+          "left_right_inner_size": [
+            23
+          ],
+          "base_size": [
+            23
+          ],
+          "has_lid": [
+            1
+          ],
+          "lid_size": [
+            0.99,
+            0,
+            0
+          ],
+          "lid_offset": [
+            0,
+            -0.02,
+            -0.015
+          ],
+          "WHOLE_number_of_layer": [
+            4
+          ],
+          "WHOLE_layer_sizes": [
+            23
+          ],
+          "WHOLE_layer_offset": [
+            12
+          ],
+          "WHOLE_interval_between_layers": [
+            0.385,
+            0.31,
+            0.305
+          ],
+          "number_of_1_layer": [
+            1
+          ],
+          "layer_1_sizes": [
+            0.01,
+            0.2
+          ],
+          "layer_1_offset": [
+            0.3
+          ],
+          "interval_between_1_layers": [
+            0.1
+          ],
+          "number_of_2_layer": [
+            2
+          ],
+          "layer_2_sizes": [
+            0.01,
+            0.2
+          ],
+          "layer_2_offset": [
+            0.2
+          ],
+          "interval_between_2_layers": [
+            0.4
+          ],
+          "number_of_3_layer": [
+            0
+          ],
+          "layer_3_sizes": [
+            0.01,
+            0.2
+          ],
+          "layer_3_offset": [
+            0.05
+          ],
+          "interval_between_3_layers": [
+            0.1
+          ],
+          "number_of_4_layer": [
+            0
+          ],
+          "layer_4_sizes": [
+            0.01,
+            0.2
+          ],
+          "layer_4_offset": [
+            0.05
+          ],
+          "interval_between_4_layers": [
+            0.1
+          ],
+          "number_of_5_layer": [
+            0
+          ],
+          "layer_5_sizes": [
+            0.01,
+            0.2
+          ],
+          "layer_5_offset": [
+            0.05
+          ],
+          "interval_between_5_layers": [
+            0.1
+          ],
+          "number_of_additional_layers": [
+            0
+          ],
+          "size_1": [
+            0.5,
+            0.03,
+            0.4
+          ],
+          "offset_1": [
+            0,
+            0,
+            0
+          ],
+          "rotation_1": [
+            0,
+            0,
+            0
+          ],
+          "size_2": [
+            0.5,
+            0.03,
+            0.4
+          ],
+          "offset_2": [
+            0,
+            0,
+            0
+          ],
+          "rotation_2": [
+            0,
+            0,
+            0
+          ],
+          "size_3": [
+            0.5,
+            0.03,
+            0.4
+          ],
+          "offset_3": [
+            0,
+            0,
+            0
+          ],
+          "rotation_3": [
+            0,
+            0,
+            0
+          ],
+          "size_4": [
+            0.5,
+            0.03,
+            0.4
+          ],
+          "offset_4": [
+            0,
+            0,
+            0
+          ],
+          "rotation_4": [
+            0,
+            0,
+            0
+          ],
+          "size_5": [
+            0.5,
+            0.03,
+            0.4
+          ],
+          "offset_5": [
+            0,
+            0,
+            0
+          ],
+          "rotation_5": [
+            0,
+            0,
+            0
+          ],
+          "size_6": [
+            0.5,
+            0.03,
+            0.4
+          ],
+          "offset_6": [
+            0,
+            0,
+            0
+          ],
+          "rotation_6": [
+            0,
+            0,
+            0
+          ]
+        },
+        "component": "body"
+      },
+      {
+        "template": "Drawer_with_U_handle",
+        "parameters": {
+          "position": [
+            -15.194757,
+            -11.957718,
+            -3.236257
+          ],
+          "rotation": [
+            2.376907,
+            -0.546778,
+            -180
+          ],
+          "number_of_drawer": [
+            1
+          ],
+          "drawers_params": [
+            254,
+            84,
+            220,
+            16,
+            266,
+            124.632996,
+            18,
+            0,
+            11,
+            11,
+            1,
+            134,
+            40,
+            8,
+            3,
+            2,
+            8.3,
+            7,
+            51.873001,
+            124
+          ]
+        },
+        "component": "drawer"
+      },
+      {
+        "template": "Drawer_with_U_handle",
+        "parameters": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            3,
+            0,
+            -180
+          ],
+          "number_of_drawer": [
+            1
+          ],
+          "drawers_params": [
+            254,
+            84,
+            220,
+            16,
+            266,
+            118.632996,
+            16,
+            4,
+            11,
+            11,
+            1,
+            134,
+            40,
+            8,
+            3,
+            3,
+            9.3,
+            19,
+            -64.126999,
+            124
+          ]
+        },
+        "component": "drawer"
+      }
+    ]
+  }
+]
