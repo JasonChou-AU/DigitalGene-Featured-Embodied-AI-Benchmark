@@ -47,7 +47,7 @@ def get_grasp_spec(obj, manipulation_params=None):
             
             # 基础局部位置贴合在外表面
             # 注意：原点在衔接处，y 向上，所以 -obj.inner_size[2]/2 是底座中心
-            r = obj.outer_size[0] + 0.09
+            r = obj.outer_size[0] + 10
             local_pos = np.array([r * np.sin(angle), -obj.inner_size[2] / 2, -r * np.cos(angle)])
             
             # 趋近方向指向圆心
@@ -60,7 +60,7 @@ def get_grasp_spec(obj, manipulation_params=None):
         else:
             # --- 模式 2: 顶部抓取 (Top-down Grasp) ---
             # 基础局部位置贴合在顶盖表面（不包含夹爪长度后退量）
-            local_pos = np.array([0.0, (obj.outer_size[2] - obj.inner_size[2]) / 2, 0.0])
+            local_pos = np.array([0.0, (obj.outer_size[2] - obj.inner_size[2]) / 2 + 15, 0.0])
             
             # 趋近方向向下
             approach_dir = np.array([0.0, -1.0, 0.0])

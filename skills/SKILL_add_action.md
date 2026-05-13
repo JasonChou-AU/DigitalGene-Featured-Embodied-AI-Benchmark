@@ -218,3 +218,7 @@ Before final response, verify:
 - zsh
 - isaac 4.0.0
 - curobo v0.7.6
+
+## Tips
+- pregrasp pose = grasp pose - approach direction * pregrasp offset, after gipper arives at pregrasp pose, it shouldn't move forward along approach direction to move to grasp pose. Because the gripper is already in the correct position for grasping.
+- create new `actions/franka_*_action.py`  and  `actions/test_in_isaac_*.py`, never modify any existing files, never inherit any existing classes, never import other actions.You should implement functions you need again even if they have been implemented in existing *_action.py. 

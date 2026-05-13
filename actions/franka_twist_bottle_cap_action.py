@@ -18,7 +18,7 @@ from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig, MotionGen
 from omni.isaac.core.utils.types import ArticulationAction
 
 
-class FrankaPullDrawerAction:
+class FrankaTwistBottleCapAction:
     def __init__(
         self,
         world,
@@ -37,7 +37,6 @@ class FrankaPullDrawerAction:
 
         self._cmd_plan = None
         self._cmd_progress = 0.0
-        self._queued_target_poses = []
 
         self._gripper_open_pos = self._franka.gripper.joint_opened_positions
         self._gripper_closed_pos = self._franka.gripper.joint_closed_positions
@@ -48,8 +47,12 @@ class FrankaPullDrawerAction:
 
         self._saved_grasp_orient = np.array([0, 1, 0, 0], dtype=np.float32)
         self._saved_approach_dir = np.array([0, 0, 0], dtype=np.float32)
-
         self._last_error = None
+
+        self._twist_initialized = False
+        self._twist_axis_world = None
+        self._twist_prev_vec = None
+        self._twist_accum_deg = 0.0
 
         self._configure_determinism()
         self._init_curobo()
@@ -67,7 +70,7 @@ class FrankaPullDrawerAction:
         return self._saved_approach_dir
 
     def is_busy(self):
-        return self._cmd_plan is not None or self._post_exec_action is not None or len(self._queued_target_poses) > 0
+        return self._cmd_plan is not None or self._post_exec_action is not None
 
     def open_gripper(self):
         self._gripper_locked = False
@@ -80,34 +83,37 @@ class FrankaPullDrawerAction:
         self.open_gripper()
         self._cmd_plan = None
         self._cmd_progress = 0.0
-        self._queued_target_poses = []
         self._post_exec_action = None
         self._wait_timer = 0
         self._last_error = None
+        self._twist_initialized = False
+        self._twist_axis_world = None
+        self._twist_prev_vec = None
+        self._twist_accum_deg = 0.0
 
     def move(self, target_pose):
         self._last_error = None
         return self._plan_and_set_execution(self._to_pose(target_pose))
 
-    def move_pull_step(self, target_pose):
+    def move_twist_step(self, target_pose):
         self._last_error = None
-        pull_plan_profiles = [
+        twist_profiles = [
             {"enable_graph": False, "max_attempts": 2, "time_dilation_factor": 0.12},
             {"enable_graph": False, "max_attempts": 4, "time_dilation_factor": 0.18},
-            {"enable_graph": False, "max_attempts": 6, "time_dilation_factor": 0.25},
+            {"enable_graph": True, "max_attempts": 8, "time_dilation_factor": 0.25},
         ]
         return self._plan_and_set_execution(
             self._to_pose(target_pose),
             use_collision=False,
-            plan_profiles=pull_plan_profiles,
+            plan_profiles=twist_profiles,
         )
 
-    def plan_drawer_grasp(self, drawer_link_prim_path, grasp_id=2, pregrasp_offset=0.11):
+    def plan_lid_grasp(self, bottle_root_prim_path, grasp_id=5, pregrasp_offset=0.10):
         self._last_error = None
 
-        grasp_pos, grasp_orient, approach_dir = self._get_grasp_world_pose(drawer_link_prim_path, grasp_id)
+        grasp_pos, grasp_orient, approach_dir = self._get_grasp_world_pose(bottle_root_prim_path, grasp_id)
         if grasp_pos is None:
-            self._last_error = f"grasp pose not found: {drawer_link_prim_path}/grasps/grasp_{grasp_id}"
+            self._last_error = f"grasp pose not found: {bottle_root_prim_path}/grasps/grasp_{grasp_id}"
             print(f"[ERROR] {self._last_error}")
             return False
 
@@ -117,139 +123,144 @@ class FrankaPullDrawerAction:
             quaternion=self._tensor_args.to_device(grasp_orient.astype(np.float32)),
         )
         if not self._plan_and_set_execution(pre_pose):
-            self._last_error = "drawer grasp pre-pose planning failed"
+            self._last_error = "lid grasp pre-pose planning failed"
             return False
 
         self._saved_grasp_orient = grasp_orient.astype(np.float32)
         self._saved_approach_dir = approach_dir.astype(np.float32)
-        # User requirement: pregrasp itself is the best gripper-close pose.
-        self._queued_target_poses = []
         self._post_exec_action = ("close_gripper", None)
         self._wait_timer = 0
         return True
 
-    def build_pull_waypoints(
+    def build_twist_waypoints(
         self,
-        drawer_joint_prim_path,
-        desired_alpha=0.5,
-        segments=5,
-        safety_margin=0.01,
-        max_step_distance=0.015,
+        lid_joint_prim_path,
+        total_twist_deg=360.0,
+        segments=16,
     ):
-        stats = self.get_drawer_pull_stats(drawer_joint_prim_path)
+        stats = self.get_lid_twist_stats(lid_joint_prim_path)
         if stats is None:
             return None, None
 
-        max_pull = float(stats["max_pull_distance"])
-        cur_pull = float(stats["pulled_distance"])
-        desired_alpha = float(np.clip(desired_alpha, 0.0, 1.0))
+        hand_pos, hand_quat_wxyz, _ = self._get_hand_world_pose()
+        hand_rot = R.from_quat([hand_quat_wxyz[1], hand_quat_wxyz[2], hand_quat_wxyz[3], hand_quat_wxyz[0]])
+        axis_world = stats["axis_world"]
+        anchor_world = stats["anchor_world"]
 
-        target_pull = min(desired_alpha * max_pull, max_pull - float(safety_margin))
-        target_pull = max(target_pull, 0.0)
-        delta_pull = target_pull - cur_pull
-        if delta_pull <= 1e-4:
-            self._last_error = (
-                f"requested alpha={desired_alpha:.3f} is not larger than current alpha={stats['alpha']:.3f}; "
-                f"cur_pull={cur_pull:.4f}, max_pull={max_pull:.4f}"
-            )
-            print(f"[WARN] {self._last_error}")
-            return None, None
+        rel = hand_pos - anchor_world
+        axial = axis_world * float(np.dot(rel, axis_world))
+        radial = rel - axial
 
-        hand_start = self._get_hand_world_position()
-        axis_world = stats["axis_world"].astype(np.float32)
-        orient = self._saved_grasp_orient.astype(np.float32)
-
-        max_step_distance = max(float(max_step_distance), 1e-4)
-        seg_from_step = int(np.ceil(delta_pull / max_step_distance))
-        n_seg = max(int(segments), seg_from_step, 1)
+        n_seg = max(int(segments), 1)
         waypoints = []
         for i in range(1, n_seg + 1):
-            ratio = float(i) / float(n_seg)
-            pos = hand_start + axis_world * (delta_pull * ratio)
+            frac = float(i) / float(n_seg)
+            angle_deg = float(total_twist_deg) * frac
+            rot_delta = R.from_rotvec(axis_world * np.deg2rad(angle_deg))
+
+            if np.linalg.norm(radial) > 1e-5:
+                pos_i = anchor_world + rot_delta.apply(radial) + axial
+            else:
+                pos_i = hand_pos.copy()
+
+            rot_i = rot_delta * hand_rot
+            q_xyzw = rot_i.as_quat()
+            quat_i_wxyz = np.array([q_xyzw[3], q_xyzw[0], q_xyzw[1], q_xyzw[2]], dtype=np.float32)
+
             waypoints.append(
                 {
-                    "position": pos.astype(np.float32),
-                    "orientation": orient,
+                    "position": pos_i.astype(np.float32),
+                    "orientation": quat_i_wxyz,
                 }
             )
 
         plan_info = {
-            "current_alpha": float(stats["alpha"]),
-            "target_alpha": float(target_pull / max_pull),
-            "current_pull": cur_pull,
-            "target_pull": target_pull,
-            "delta_pull": float(delta_pull),
-            "max_pull": max_pull,
-            "max_step_distance": max_step_distance,
-            "lower_limit": float(stats["lower_limit"]),
-            "upper_limit": float(stats["upper_limit"]),
+            "segments": n_seg,
+            "total_twist_deg": float(total_twist_deg),
+            "axis_world": axis_world.astype(np.float32),
+            "anchor_world": anchor_world.astype(np.float32),
+            "radial_norm": float(np.linalg.norm(radial)),
         }
         return waypoints, plan_info
 
-    def get_drawer_pull_stats(self, drawer_joint_prim_path):
+    def plan_post_twist_lift(self, lift_delta_z=0.08):
+        hand_pos, hand_quat_wxyz, _ = self._get_hand_world_pose()
+        target_pos = hand_pos.copy()
+        target_pos[2] += float(lift_delta_z)
+        target_pose = Pose(
+            position=self._tensor_args.to_device(target_pos.astype(np.float32)),
+            quaternion=self._tensor_args.to_device(hand_quat_wxyz.astype(np.float32)),
+        )
+        return self._plan_and_set_execution(target_pose, use_collision=False)
+
+    def reset_twist_tracking(self, lid_link_prim_path, lid_joint_prim_path):
+        stats = self.get_lid_twist_stats(lid_joint_prim_path)
+        if stats is None:
+            return False
+        self._twist_axis_world = stats["axis_world"].astype(np.float64)
+        vec = self._extract_lid_reference_vector(lid_link_prim_path, self._twist_axis_world)
+        if vec is None:
+            self._last_error = "cannot initialize twist tracking vector"
+            print(f"[ERROR] {self._last_error}")
+            return False
+        self._twist_prev_vec = vec
+        self._twist_accum_deg = 0.0
+        self._twist_initialized = True
+        return True
+
+    def get_accumulated_twist_deg(self, lid_link_prim_path, lid_joint_prim_path):
+        if not self._twist_initialized:
+            if not self.reset_twist_tracking(lid_link_prim_path, lid_joint_prim_path):
+                return None
+
+        vec_cur = self._extract_lid_reference_vector(lid_link_prim_path, self._twist_axis_world)
+        if vec_cur is None:
+            self._last_error = "cannot update twist tracking vector"
+            print(f"[WARN] {self._last_error}")
+            return None
+
+        sin_term = float(np.dot(self._twist_axis_world, np.cross(self._twist_prev_vec, vec_cur)))
+        cos_term = float(np.dot(self._twist_prev_vec, vec_cur))
+        delta_deg = float(np.rad2deg(np.arctan2(sin_term, cos_term)))
+        self._twist_accum_deg += delta_deg
+        self._twist_prev_vec = vec_cur
+        return float(self._twist_accum_deg)
+
+    def get_lid_twist_stats(self, lid_joint_prim_path):
         stage = self._world.stage
-        joint = UsdPhysics.PrismaticJoint.Get(stage, drawer_joint_prim_path)
+        joint = UsdPhysics.RevoluteJoint.Get(stage, lid_joint_prim_path)
         if not joint:
-            self._last_error = f"invalid prismatic joint path: {drawer_joint_prim_path}"
+            self._last_error = f"invalid revolute joint path: {lid_joint_prim_path}"
             print(f"[ERROR] {self._last_error}")
             return None
 
         body0_targets = joint.GetBody0Rel().GetTargets()
         body1_targets = joint.GetBody1Rel().GetTargets()
         if len(body0_targets) == 0 or len(body1_targets) == 0:
-            self._last_error = f"joint body targets missing: {drawer_joint_prim_path}"
+            self._last_error = f"joint body targets missing: {lid_joint_prim_path}"
             print(f"[ERROR] {self._last_error}")
             return None
 
         body0_path = str(body0_targets[0])
         body1_path = str(body1_targets[0])
+        axis_world, anchor_world = self._compute_joint_axis_anchor_world(joint, body0_path)
+        if axis_world is None:
+            self._last_error = f"joint axis world failed: {lid_joint_prim_path}"
+            print(f"[ERROR] {self._last_error}")
+            return None
 
         lower = joint.GetLowerLimitAttr().Get()
         upper = joint.GetUpperLimitAttr().Get()
-        lower = float(lower if lower is not None else 0.0)
-        upper = float(upper if upper is not None else 0.0)
-
-        axis_token = str(joint.GetAxisAttr().Get())
-        axis_local = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-        if axis_token.upper() == "X":
-            axis_local = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-        elif axis_token.upper() == "Y":
-            axis_local = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-
-        local_pos0 = np.array(joint.GetLocalPos0Attr().Get(), dtype=np.float64)
-        local_pos1 = np.array(joint.GetLocalPos1Attr().Get(), dtype=np.float64)
-
-        t0 = self._get_prim_world_matrix(body0_path)
-        t1 = self._get_prim_world_matrix(body1_path)
-
-        origin0_world = self._transform_point(t0, local_pos0)
-        origin1_world = self._transform_point(t1, local_pos1)
-
-        axis_world = t0[:3, :3] @ axis_local
-        axis_norm = np.linalg.norm(axis_world)
-        if axis_norm < 1e-8:
-            self._last_error = f"joint axis world norm too small: {drawer_joint_prim_path}"
-            print(f"[ERROR] {self._last_error}")
-            return None
-        axis_world = axis_world / axis_norm
-
-        raw_disp = float(np.dot(origin1_world - origin0_world, axis_world))
-        pulled_distance = max(raw_disp - lower, 0.0)
-        max_pull_distance = max(upper - lower, 1e-6)
-        alpha = float(np.clip(pulled_distance / max_pull_distance, 0.0, 1.0))
+        lower = float(lower if lower is not None else -180.0)
+        upper = float(upper if upper is not None else 180.0)
 
         return {
             "body0_path": body0_path,
             "body1_path": body1_path,
-            "lower_limit": lower,
-            "upper_limit": upper,
             "axis_world": axis_world.astype(np.float32),
-            "origin0_world": origin0_world.astype(np.float32),
-            "origin1_world": origin1_world.astype(np.float32),
-            "raw_displacement": raw_disp,
-            "pulled_distance": float(pulled_distance),
-            "max_pull_distance": float(max_pull_distance),
-            "alpha": alpha,
+            "anchor_world": anchor_world.astype(np.float32),
+            "lower_limit_deg": lower,
+            "upper_limit_deg": upper,
         }
 
     def step(self):
@@ -258,14 +269,6 @@ class FrankaPullDrawerAction:
             if self._cmd_progress > last_idx:
                 self._cmd_plan = None
                 self._cmd_progress = 0.0
-
-                if len(self._queued_target_poses) > 0:
-                    next_pose = self._queued_target_poses.pop(0)
-                    if not self._plan_and_set_execution(next_pose):
-                        self._last_error = "queued pose planning failed"
-                        return True
-                    return False
-
             else:
                 idx0 = int(np.floor(self._cmd_progress))
                 idx1 = min(idx0 + 1, last_idx)
@@ -299,13 +302,6 @@ class FrankaPullDrawerAction:
                 self._franka.apply_action(art_action)
                 self._cmd_progress += self._execution_speed_scale
                 return False
-
-        if self._cmd_plan is None and len(self._queued_target_poses) > 0:
-            next_pose = self._queued_target_poses.pop(0)
-            if not self._plan_and_set_execution(next_pose):
-                self._last_error = "queued pose planning failed"
-                return True
-            return False
 
         if self._post_exec_action is not None:
             action_name, _ = self._post_exec_action
@@ -400,13 +396,33 @@ class FrankaPullDrawerAction:
         orientation = np.array([q[3], q[0], q[1], q[2]], dtype=np.float32)
         return pos, orientation, approach_dir_world
 
-    def _get_hand_world_position(self):
+    def _get_hand_world_pose(self):
         stage = self._world.stage
         hand_prim = stage.GetPrimAtPath("/World/Franka/panda_hand")
         if not hand_prim.IsValid():
             raise RuntimeError("hand prim not found: /World/Franka/panda_hand")
 
         xf = UsdGeom.Xformable(hand_prim)
+        mat = xf.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        t = mat.ExtractTranslation()
+        pos = np.array([t[0], t[1], t[2]], dtype=np.float32)
+
+        x_axis = np.array([mat[0][0], mat[0][1], mat[0][2]], dtype=np.float32)
+        y_axis = np.array([mat[1][0], mat[1][1], mat[1][2]], dtype=np.float32)
+        z_axis = np.array([mat[2][0], mat[2][1], mat[2][2]], dtype=np.float32)
+        x_axis /= np.linalg.norm(x_axis)
+        y_axis /= np.linalg.norm(y_axis)
+        z_axis /= np.linalg.norm(z_axis)
+        rot_mat = np.stack([x_axis, y_axis, z_axis], axis=1)
+        q = R.from_matrix(rot_mat).as_quat()
+        quat_wxyz = np.array([q[3], q[0], q[1], q[2]], dtype=np.float32)
+        return pos, quat_wxyz, rot_mat
+
+    def _get_prim_world_position(self, prim_path):
+        prim = self._world.stage.GetPrimAtPath(prim_path)
+        if not prim.IsValid():
+            raise RuntimeError(f"prim not found: {prim_path}")
+        xf = UsdGeom.Xformable(prim)
         mat = xf.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
         t = mat.ExtractTranslation()
         return np.array([t[0], t[1], t[2]], dtype=np.float32)
@@ -495,8 +511,8 @@ class FrankaPullDrawerAction:
                 print(
                     "[INFO] CuRobo planning success, "
                     f"profile={idx}, graph={cfg['enable_graph']}, attempts={cfg['max_attempts']}, "
-                    f"td={cfg['time_dilation_factor']}, "
-                    f"use_collision={use_collision}, waypoints={len(self._cmd_plan.position)}"
+                    f"td={cfg['time_dilation_factor']}, use_collision={use_collision}, "
+                    f"waypoints={len(self._cmd_plan.position)}"
                 )
                 return True
 
@@ -513,6 +529,60 @@ class FrankaPullDrawerAction:
             jerk=self._tensor_args.to_device(sim_js.velocities) * 0.0,
             joint_names=self._franka.dof_names,
         ).get_ordered_joint_state(self._motion_gen.kinematics.joint_names)
+
+    def _compute_joint_axis_anchor_world(self, revolute_joint, body0_path):
+        axis_token = str(revolute_joint.GetAxisAttr().Get())
+        axis_local = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        if axis_token.upper() == "Y":
+            axis_local = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        elif axis_token.upper() == "Z":
+            axis_local = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+
+        local_pos0 = np.array(revolute_joint.GetLocalPos0Attr().Get(), dtype=np.float64)
+        local_rot0 = revolute_joint.GetLocalRot0Attr().Get()
+        local_rot0_m = self._quat_wxyz_to_matrix(local_rot0)
+
+        t0 = self._get_prim_world_matrix(body0_path)
+        anchor_world = self._transform_point(t0, local_pos0)
+        axis_world = t0[:3, :3] @ (local_rot0_m @ axis_local)
+        axis_norm = np.linalg.norm(axis_world)
+        if axis_norm < 1e-8:
+            return None, None
+        axis_world = axis_world / axis_norm
+        return axis_world, anchor_world
+
+    def _extract_lid_reference_vector(self, lid_link_prim_path, axis_world):
+        t_lid = self._get_prim_world_matrix(lid_link_prim_path)
+        x_axis = t_lid[:3, 0]
+        y_axis = t_lid[:3, 1]
+
+        def _project(v):
+            v_proj = v - axis_world * float(np.dot(v, axis_world))
+            n = np.linalg.norm(v_proj)
+            if n < 1e-8:
+                return None
+            return v_proj / n
+
+        v = _project(x_axis)
+        if v is None:
+            v = _project(y_axis)
+        return v
+
+    @staticmethod
+    def _quat_wxyz_to_matrix(q):
+        if q is None:
+            return np.eye(3, dtype=np.float64)
+        try:
+            w = float(q.GetReal())
+            imag = q.GetImaginary()
+            x, y, z = float(imag[0]), float(imag[1]), float(imag[2])
+            return R.from_quat([x, y, z, w]).as_matrix()
+        except Exception:
+            arr = np.asarray(q, dtype=np.float64).reshape(-1)
+            if arr.shape[0] != 4:
+                return np.eye(3, dtype=np.float64)
+            w, x, y, z = float(arr[0]), float(arr[1]), float(arr[2]), float(arr[3])
+            return R.from_quat([x, y, z, w]).as_matrix()
 
     def _get_prim_world_matrix(self, prim_path):
         prim = self._world.stage.GetPrimAtPath(prim_path)

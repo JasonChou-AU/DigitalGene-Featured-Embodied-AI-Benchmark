@@ -1,0 +1,84 @@
+[
+  {
+    "category": "Mug",
+    "id": "Mug_clean",
+    "type": "mesh",
+    "conceptualization": [
+      {
+        "template": "Multilevel_Body",
+        "parameters": {
+          "position": [
+            -2.504034,
+            -23.975582,
+            -36.111443
+          ],
+          "rotation": [
+            33.088753,
+            1.557341,
+            -1.557966
+          ],
+          "num_levels": [
+            4
+          ],
+          "level_1_bottom_radius": [
+            46.717,
+            42.700001
+          ],
+          "level_1_top_radius": [
+            43.784,
+            49.700001
+          ],
+          "level_1_height": [
+            15.916,
+            -5
+          ],
+          "level_2_top_radius": [
+            45,
+            41
+          ],
+          "level_2_height": [
+            4
+          ],
+          "level_3_top_radius": [
+            43.08,
+            37.396999
+          ],
+          "level_3_height": [
+            3.2
+          ],
+          "level_4_top_radius": [
+            43.079999,
+            39.073
+          ],
+          "level_4_height": [
+            72.560001
+          ]
+        },
+        "component": "body"
+      },
+      {
+        "template": "Curved_Handle",
+        "parameters": {
+          "position": [
+            -2.185434,
+            -5.445404,
+            24.409794
+          ],
+          "rotation": [
+            37.950714,
+            -2.842292,
+            -3.38601
+          ],
+          "radius": [
+            30.020001,
+            7.531
+          ],
+          "central_angle": [
+            172
+          ]
+        },
+        "component": "handle"
+      }
+    ]
+  }
+]

@@ -22,7 +22,7 @@ gripper_stl_path = os.path.join(project_root, "standard_gripper.stl")
 
 if __name__ == "__main__":
 
-    with open("conceptualization.pkl", "rb") as f:
+    with open("lemon_tea.pkl", "rb") as f:
         data_list = pickle.load(f)
 
     for data in data_list:
@@ -109,7 +109,7 @@ if __name__ == "__main__":
 
         # 准备夹爪基础模型
         gripper_mesh = o3d.io.read_triangle_mesh(gripper_stl_path)
-        gripper_mesh.scale(0.2, center=[0, 0, 0])
+        gripper_mesh.scale(10, center=[0, 0, 0])
         gripper_mesh.paint_uniform_color([1, 0, 0]) # 红色夹爪
         gripper_mesh.compute_vertex_normals()
 
@@ -121,7 +121,7 @@ if __name__ == "__main__":
                 continue
 
             # 测试不同的参数 (例如：侧面抓取和顶部抓取)
-            test_params = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)] 
+            test_params = [(0.0, 0.0), (0.5, 0), (1.0, 0.0), (1.5, 0), (0.0, 1.0)] 
             
             for p1, p2 in test_params:
                 grasp_spec = get_grasp_spec(obj, manipulation_params=(p1, p2))
@@ -149,16 +149,33 @@ if __name__ == "__main__":
                 cls_dir = grasp_spec["world_finger_closing_direction"]
 
                 # 紫色直线: Approach 方向 (长度设为 0.5 方便观察)
-                arrow_approach = draw_arrow(origin, app_dir, color=[0.5, 0, 0.5], length=0.5) 
+                arrow_approach = draw_arrow(origin, app_dir, color=[0.5, 0, 0.5], length=20) 
                 
                 # 橙色直线: Finger Close 方向
-                arrow_finger = draw_arrow(origin, cls_dir, color=[1, 0.5, 0], length=0.5)
+                arrow_finger = draw_arrow(origin, cls_dir, color=[1, 0.5, 0], length=20)
 
                 grasp_assets.extend([arrow_approach, arrow_finger])
 
         # =========================
         # Final Visualization
         # =========================
-        pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(pts))
+        # 使用分部件 mesh 代替点云:
+        # Body -> 灰色, Lid -> 蓝色
+        part_meshes = []
+        for _, obj in objs.items():
+            mesh = o3d.geometry.TriangleMesh()
+            mesh.vertices = o3d.utility.Vector3dVector(obj.vertices)
+            mesh.triangles = o3d.utility.Vector3iVector(obj.faces)
+            mesh.compute_vertex_normals()
+
+            if obj.semantic == 'Body':
+                mesh.paint_uniform_color([0.6, 0.6, 0.6])  # gray
+            elif obj.semantic == 'Lid':
+                mesh.paint_uniform_color([0.1, 0.4, 0.9])  # blue
+            else:
+                mesh.paint_uniform_color([0.75, 0.75, 0.75])  # fallback
+
+            part_meshes.append(mesh)
+
         # 加上物体本身的坐标系 coordinates (之前循环生成的)
-        o3d.visualization.draw_geometries([pcd] + coordinates + grasp_assets)
+        o3d.visualization.draw_geometries(part_meshes + coordinates + grasp_assets)

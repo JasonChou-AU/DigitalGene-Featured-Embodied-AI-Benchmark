@@ -1,0 +1,28 @@
+{
+  "FRANKA": {
+    "prim_path": "/World/Franka",
+    "name": "franka",
+    "POSITION": [3.5, 2.0, 0.74],
+    "WXYZ": [0.70710678, 0.0, 0.0, 0.70710678],
+    "SCALE": 1.0
+  },
+  "OBJECTS": [
+    {
+      "path": "/home/zjx/project/ArtVIP/ArtVIP/Scenes/dining_room/diningroom/model_diningroom.usd",
+      "ADJUSTED_POS": [0.0, 0.0, 0.0],
+      "ADJUSTED_WXYZ": [1.0, 0.0, 0.0, 0.0],
+      "STATIC_COLLIDER": true
+    },
+    {
+      "path": "/home/zjx/project/ArtVIP/ArtVIP/Articulated_objects/small_furniture/table/table_7/model_table_7.usd",
+      "ADJUSTED_POS": [3.7, 2.5, 0.0],
+      "ADJUSTED_WXYZ": [0.70710678, 0.0, 0.0, -0.70710678],
+      "STATIC_COLLIDER": true
+    },
+    {
+      "path": "/home/zjx/project/benchmark/real_object_data/StorageFurniture/usda_output/StorageFurniture_drawer_clean_simple_collision.usda",
+      "ADJUSTED_POS": [3.53, 3.0, 0.97],
+      "ADJUSTED_WXYZ": [0.0, 0.0, 0.68375, -0.72971]
+    }
+  ]
+}

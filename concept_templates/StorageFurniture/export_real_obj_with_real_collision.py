@@ -9,6 +9,11 @@ from knowledge_definitions import get_grasp_spec
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
 from scipy.spatial.transform import Rotation as Rot
 
+try:
+    from pxr import PhysxSchema
+except Exception:
+    PhysxSchema = None
+
 
 def _to_vec3f(v):
     return Gf.Vec3f(float(v[0]), float(v[1]), float(v[2]))
@@ -83,7 +88,20 @@ def _load_obj_vertices_faces_uv(path):
     )
 
 
-def _create_mesh(stage, mesh_path, verts, faces, scale, collision=False, approximation="convexHull", uvs=None, face_uvs=None):
+def _create_mesh(
+    stage,
+    mesh_path,
+    verts,
+    faces,
+    scale,
+    collision=False,
+    approximation="convexHull",
+    uvs=None,
+    face_uvs=None,
+    physics_material=None,
+    contact_offset=0.003,
+    rest_offset=0.0,
+):
     mesh = UsdGeom.Mesh.Define(stage, mesh_path)
     verts = np.asarray(verts, dtype=np.float32) * float(scale)
     faces = np.asarray(faces, dtype=np.int32)
@@ -111,6 +129,12 @@ def _create_mesh(stage, mesh_path, verts, faces, scale, collision=False, approxi
         UsdPhysics.MeshCollisionAPI.Apply(prim)
         UsdPhysics.CollisionAPI.Apply(prim)
         prim.CreateAttribute("physics:approximation", Sdf.ValueTypeNames.Token).Set(approximation)
+        _configure_collision_prim(
+            prim,
+            physics_material=physics_material,
+            contact_offset=contact_offset,
+            rest_offset=rest_offset,
+        )
 
     return mesh
 
@@ -136,6 +160,97 @@ def _bind_preview_texture(stage, mesh_prim, texture_path, material_name):
     shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).ConnectToSource(tex.ConnectableAPI(), "rgb")
     mat.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
     UsdShade.MaterialBindingAPI(mesh_prim).Bind(mat)
+
+
+def _ensure_physics_material(
+    stage,
+    material_path,
+    static_friction=0.8,
+    dynamic_friction=0.6,
+    restitution=0.0,
+):
+    mat = UsdShade.Material.Define(stage, Sdf.Path(material_path))
+    mat_prim = mat.GetPrim()
+    mat_api = UsdPhysics.MaterialAPI.Apply(mat_prim)
+    mat_api.CreateStaticFrictionAttr().Set(float(static_friction))
+    mat_api.CreateDynamicFrictionAttr().Set(float(dynamic_friction))
+    mat_api.CreateRestitutionAttr().Set(float(restitution))
+    return mat
+
+
+def _bind_physics_material(prim, physics_material):
+    if physics_material is None:
+        return
+    try:
+        rel = prim.CreateRelationship("physics:material:binding", False)
+        rel.SetTargets([physics_material.GetPath()])
+    except Exception:
+        pass
+    try:
+        if hasattr(UsdShade.Tokens, "physics"):
+            UsdShade.MaterialBindingAPI(prim).Bind(physics_material, materialPurpose=UsdShade.Tokens.physics)
+        else:
+            UsdShade.MaterialBindingAPI(prim).Bind(physics_material)
+    except Exception:
+        pass
+
+
+def _configure_collision_prim(
+    prim,
+    physics_material=None,
+    contact_offset=0.003,
+    rest_offset=0.0,
+):
+    UsdPhysics.CollisionAPI.Apply(prim)
+    _bind_physics_material(prim, physics_material)
+    if PhysxSchema is not None:
+        try:
+            c_api = PhysxSchema.PhysxCollisionAPI.Apply(prim)
+            c_api.CreateContactOffsetAttr().Set(float(contact_offset))
+            c_api.CreateRestOffsetAttr().Set(float(rest_offset))
+            return
+        except Exception:
+            pass
+    try:
+        prim.CreateAttribute("physxCollision:contactOffset", Sdf.ValueTypeNames.Float).Set(float(contact_offset))
+        prim.CreateAttribute("physxCollision:restOffset", Sdf.ValueTypeNames.Float).Set(float(rest_offset))
+    except Exception:
+        pass
+
+
+def _set_drawer_joint_passive_resistance(
+    joint_prim,
+    drive_damping=220.0,
+    drive_stiffness=0.0,
+    drive_max_force=1.0e8,
+    joint_friction_force=4.0,
+):
+    # Velocity damping reduces jitter/chatter when the drawer moves.
+    drive = UsdPhysics.DriveAPI.Apply(joint_prim, "linear")
+    drive.CreateTypeAttr().Set("force")
+    drive.CreateStiffnessAttr().Set(float(drive_stiffness))
+    drive.CreateDampingAttr().Set(float(drive_damping))
+    drive.CreateMaxForceAttr().Set(float(drive_max_force))
+
+    # Static-like joint friction helps prevent gravity-induced self sliding on mild tilt.
+    if float(joint_friction_force) > 0.0:
+        if PhysxSchema is not None:
+            try:
+                j_api = PhysxSchema.PhysxJointAPI.Apply(joint_prim)
+                if hasattr(j_api, "CreateJointFrictionAttr"):
+                    j_api.CreateJointFrictionAttr().Set(float(joint_friction_force))
+                else:
+                    joint_prim.CreateAttribute("physxJoint:jointFriction", Sdf.ValueTypeNames.Float).Set(
+                        float(joint_friction_force)
+                    )
+            except Exception:
+                joint_prim.CreateAttribute("physxJoint:jointFriction", Sdf.ValueTypeNames.Float).Set(
+                    float(joint_friction_force)
+                )
+        else:
+            joint_prim.CreateAttribute("physxJoint:jointFriction", Sdf.ValueTypeNames.Float).Set(
+                float(joint_friction_force)
+            )
 
 
 def _create_link_xform(
@@ -441,6 +556,17 @@ def export_with_real_collision(
     base_mass_kg=2000.0,
     drawer_mass_kg=1.5,
     close_drawer_initially=True,
+    base_collision_static_friction=0.8,
+    base_collision_dynamic_friction=0.6,
+    drawer_handle_static_friction=1.25,
+    drawer_handle_dynamic_friction=1.05,
+    collision_restitution=0.0,
+    collision_contact_offset=0.003,
+    collision_rest_offset=0.0,
+    drawer_joint_drive_damping=220.0,
+    drawer_joint_drive_stiffness=0.0,
+    drawer_joint_drive_max_force=1.0e8,
+    drawer_joint_friction_force=4.0,
 ):
     texture_path = os.path.abspath(texture_path)
     segmentation_dir = os.path.abspath(segmentation_dir)
@@ -472,6 +598,20 @@ def export_with_real_collision(
     joints_path = f"{root_path}/joints"
     UsdGeom.Xform.Define(stage, links_path)
     UsdGeom.Xform.Define(stage, joints_path)
+    base_collision_material = _ensure_physics_material(
+        stage,
+        material_path=f"{root_path}/Looks/BaseCollisionMaterial",
+        static_friction=base_collision_static_friction,
+        dynamic_friction=base_collision_dynamic_friction,
+        restitution=collision_restitution,
+    )
+    drawer_handle_material = _ensure_physics_material(
+        stage,
+        material_path=f"{root_path}/Looks/DrawerHandleHighFrictionMaterial",
+        static_friction=drawer_handle_static_friction,
+        dynamic_friction=drawer_handle_dynamic_friction,
+        restitution=collision_restitution,
+    )
 
     components = []
     for c in concept_data["conceptualization"]:
@@ -523,6 +663,9 @@ def export_with_real_collision(
         scale_to_meters,
         collision=True,
         approximation="convexDecomposition",
+        physics_material=base_collision_material,
+        contact_offset=collision_contact_offset,
+        rest_offset=collision_rest_offset,
     )
 
     drawer_obj_map = {idx: path for idx, path in drawer_obj_paths}
@@ -570,6 +713,9 @@ def export_with_real_collision(
             scale_to_meters,
             collision=True,
             approximation="convexDecomposition",
+            physics_material=drawer_handle_material,
+            contact_offset=collision_contact_offset,
+            rest_offset=collision_rest_offset,
         )
 
         joint_path = f"{joints_path}/drawer_joint_{real_drawer_idx}"
@@ -589,6 +735,13 @@ def export_with_real_collision(
         joint.CreateLowerLimitAttr().Set(float(lower * float(scale_to_meters)))
         joint.CreateUpperLimitAttr().Set(float(upper * float(scale_to_meters)))
         joint.CreateCollisionEnabledAttr().Set(False)
+        _set_drawer_joint_passive_resistance(
+            joint.GetPrim(),
+            drive_damping=drawer_joint_drive_damping,
+            drive_stiffness=drawer_joint_drive_stiffness,
+            drive_max_force=drawer_joint_drive_max_force,
+            joint_friction_force=drawer_joint_friction_force,
+        )
 
         grasp_obj = drawer_obj
         if close_drawer_initially:
@@ -616,18 +769,24 @@ def main():
 
     texture_path = os.path.join(data_dir, "textures", "texture.jpg")
     segmentation_dir = os.path.join(data_dir, "segmentation")
-    concept_pkl_path = os.path.join(data_dir, "conceptualization", "StorageFurniture_drawer_clean.pkl")
+    concept_pkl_path = os.path.join(data_dir, "conceptualization", "whk_new.pkl")
     output_usda_path = os.path.join(data_dir, "usda_output", "StorageFurniture_drawer_clean_real_collision.usda")
 
+    # Recommended initial tuning for "about 10-degree tilt without self open/close":
+    # increase drawer_joint_friction_force first, then drawer_joint_drive_damping if needed.
     out = export_with_real_collision(
         texture_path=texture_path,
         segmentation_dir=segmentation_dir,
         concept_pkl_path=concept_pkl_path,
         output_usda_path=output_usda_path,
-        scale_to_meters=0.0015,
+        scale_to_meters=0.002,
         init_pos=(0.0, 0.0, 0.0),
         init_euler=(0.0, 0.0, 0.0),
         anchor_base=True,
+        drawer_handle_static_friction=1.25,
+        drawer_handle_dynamic_friction=1.05,
+        drawer_joint_drive_damping=220.0,
+        drawer_joint_friction_force=8.0,
     )
     print(f"[OK] exported: {out}")
 
