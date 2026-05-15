@@ -28,6 +28,13 @@ def _rotate_vector_about_axis(v, axis, angle_rad):
     return v_par + v_perp_rot
 
 
+def _make_transformation_matrix(position, rotation, rotation_order="xyz"):
+    T = np.eye(4)
+    T[:3, :3] = Rot.from_euler(rotation_order, rotation).as_matrix()
+    T[:3, 3] = np.array(position, dtype=np.float64)
+    return T
+
+
 def handle_affordance(obj, pt):
 
     def is_affordance(obj, pt):
@@ -109,7 +116,14 @@ def get_grasp_spec(obj, manipulation_params=None):
         h_rot = obj.horizontal_rotation
         h_len = obj.horizontal_length
 
-        # === replicate geometry logic (from template) ===
+        # Match Trifold_Handle geometry in concept_template.py.
+        top_mesh_position = np.array([
+            0,
+            obj.horizontal_separation[0] / 2 - h_len[0] * np.sin(h_rot[0]) / 2,
+            obj.mounting_offset[0] + h_len[0] * np.cos(h_rot[0]) / 2,
+        ], dtype=np.float64)
+        top_mesh_rotation = np.array([h_rot[0], 0, 0], dtype=np.float64)
+
         delta_y = (
             obj.horizontal_separation[0]
             - h_len[0] * np.sin(h_rot[0])
@@ -127,46 +141,88 @@ def get_grasp_spec(obj, manipulation_params=None):
         vertical_y_offset = (-h_len[0] * np.sin(h_rot[0]) - h_len[1] * np.sin(h_rot[1])) / 2
         vertical_z_offset = (h_len[1] * np.cos(h_rot[1]) + obj.mounting_offset[0] + h_len[0] * np.cos(h_rot[0])) / 2
 
-        # grasp point in vertical bar local coordinates
-        # vertical bar size: (vertical_length, vertical_thickness[0], vertical_thickness[1])
-        # move along Y direction (along the length of vertical bar)
-        grasp_position_local = np.array([
-            0,
-            rot_param_1 * (vertical_length / 2),  # move along bar length
-            obj.horizontal_thickness[1] / 2 * 1.9  # offset to center of bar
-        ])
+        if len(manipulation_params) >= 3:
+            mode_param = rot_param_2
+            close_param = rot_param_3
+        else:
+            mode_param = -1.0
+            close_param = rot_param_2
 
-        # rotation: align gripper with vertical bar
-        R_local = Rot.from_euler("xyz", [vertical_rotation, 0, 0]).as_matrix()
+        # p1 selects the handle segment and position:
+        #   [-3, -1] -> top horizontal mesh, moving along its local Z axis.
+        #   (-1, 1] -> middle vertical mesh, moving along its local Y axis.
+        if rot_param_1 <= -1.0:
+            is_top_mesh_grasp = True
+            top_position_param = np.clip(rot_param_1 + 2.0, -1.0, 1.0)
+            grasp_position_local = np.array([
+                0.0,
+                0.0,
+                top_position_param * h_len[0] / 2,
+            ], dtype=np.float64)
+            geometry_position = top_mesh_position
+            geometry_rotation = top_mesh_rotation
+            tangent_local = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+            in_plane_width = float(obj.horizontal_thickness[1])
+            plane_normal_width = float(obj.horizontal_thickness[0])
+        else:
+            is_top_mesh_grasp = False
+            vertical_position_param = np.clip(rot_param_1, -1.0, 1.0)
+            grasp_position_local = np.array([
+                0.0,
+                vertical_position_param * vertical_length / 2,
+                0.0,
+            ], dtype=np.float64)
+            geometry_position = np.array([
+                0,
+                vertical_y_offset,
+                vertical_z_offset + obj.vertical_thickness[1] / 2,
+            ], dtype=np.float64)
+            geometry_rotation = np.array([vertical_rotation, 0, 0], dtype=np.float64)
+            tangent_local = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+            in_plane_width = float(obj.vertical_thickness[1])
+            plane_normal_width = float(obj.vertical_thickness[0])
 
-        # geometry transformation (vertical mesh position and rotation)
-        geometry_position = [0, vertical_y_offset, vertical_z_offset + obj.vertical_thickness[1] / 2]
-        geometry_rotation = [vertical_rotation, 0, 0]
+        plane_normal_local = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        in_plane_cross_local = np.cross(tangent_local, plane_normal_local)
+        in_plane_cross_local = in_plane_cross_local / (np.linalg.norm(in_plane_cross_local) + 1e-12)
 
-        def apply_transform(p, pos, rot):
-            R = Rot.from_euler("xyz", rot).as_matrix()
-            return (R @ p) + pos
+        # mode_param controls finger closing direction:
+        #   < 0 -> close along the handle plane
+        #   >=0 -> close perpendicular to the handle plane
+        if mode_param >= 0.0:
+            approach_local = in_plane_cross_local
+            closing_base_local = plane_normal_local
+            grasp_width = plane_normal_width
+        else:
+            approach_local = plane_normal_local
+            closing_base_local = in_plane_cross_local
+            grasp_width = in_plane_width
 
-        # local → geometry
-        grasp_position = apply_transform(grasp_position_local, geometry_position, geometry_rotation)
-        grasp_rotation = Rot.from_euler("xyz", geometry_rotation).as_matrix() @ R_local
+        close_spin_angle = np.pi * close_param
+        if is_top_mesh_grasp:
+            close_spin_angle += np.pi / 2
 
-        # geometry → world
-        grasp_position = apply_transform(grasp_position, obj.position, obj.rotation)
-        grasp_rotation = Rot.from_euler("ZXY", obj.rotation).as_matrix() @ grasp_rotation
+        finger_closing_local = _rotate_vector_about_axis(
+            closing_base_local,
+            approach_local,
+            close_spin_angle,
+        )
 
-        # Extra rotation: rotate 180° around Y-axis, then 90° around Z-axis
-        extra_rotation = Rot.from_euler("yz", [np.pi, -np.pi/2]).as_matrix()
-        grasp_rotation = grasp_rotation @ extra_rotation
+        T_local = _build_transformation_matrix(
+            approach=approach_local,
+            closing=finger_closing_local,
+            position=grasp_position_local,
+        )
 
-        grasp_pose = np.eye(4)
-        grasp_pose[:3, :3] = grasp_rotation
-        grasp_pose[:3, 3] = grasp_position
+        T_geom = _make_transformation_matrix(geometry_position, geometry_rotation)
+        T_obj_world = _make_transformation_matrix(obj.position, obj.rotation)
+        grasp_pose = T_obj_world @ T_geom @ T_local
+
+        grasp_rotation = grasp_pose[:3, :3]
+        grasp_position = grasp_pose[:3, 3]
         world_quat = Rot.from_matrix(grasp_rotation).as_quat()
         world_approach = grasp_rotation @ np.array([0.0, 0.0, 1.0])
-        # For mug gripper visualization, finger closing direction aligns with local Y axis.
-        world_closing = grasp_rotation @ np.array([0.0, 1.0, 0.0])
-        grasp_width = float(max(obj.vertical_thickness[0], obj.vertical_thickness[1]))
+        world_closing = grasp_rotation @ np.array([1.0, 0.0, 0.0])
 
         return {
             "world_transformation_matrix": grasp_pose,
@@ -175,7 +231,7 @@ def get_grasp_spec(obj, manipulation_params=None):
             "world_approach_direction": world_approach,
             "world_finger_closing_direction": world_closing,
             "grasp_width": grasp_width,
-            "manip_params_size": 2,
+            "manip_params_size": 3,
         }
 
     # =========================

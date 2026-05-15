@@ -40,8 +40,8 @@ Always analyze repository abstractions before implementation.
 
 Minimum files to inspect:
 
-- `actions/franka_grasp_and_place_action.py`
-- `actions/test_in_isaac_grasp_place.py`
+- `actions/franka_*_action.py`
+- `actions/test_in_isaac_*.py`
 - `actions/scene_object_loader.py`
 - relevant `concept_templates/<ObjectCategory>/concept_template.py`
 - relevant `concept_templates/<ObjectCategory>/knowledge_definitions.py`
@@ -222,3 +222,4 @@ Before final response, verify:
 ## Tips
 - pregrasp pose = grasp pose - approach direction * pregrasp offset, after gipper arives at pregrasp pose, it shouldn't move forward along approach direction to move to grasp pose. Because the gripper is already in the correct position for grasping.
 - create new `actions/franka_*_action.py`  and  `actions/test_in_isaac_*.py`, never modify any existing files, never inherit any existing classes, never import other actions.You should implement functions you need again even if they have been implemented in existing *_action.py. 
+- Use cuobo in the grasp stage only.  After the Franka gripper grasps the object, try not to use CuRobo for motion planning in subsequent stages.

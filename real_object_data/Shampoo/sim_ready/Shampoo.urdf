@@ -1,0 +1,128 @@
+<?xml version='1.0' encoding='utf-8'?>
+<robot name="Shampoo">
+    <link name="world" />
+    <link name="Cylindrical_body">
+        <inertial>
+            <mass value="683074868.124623" />
+            <inertia ixx="2313229746545.290039" iyy="443654174139.864685" izz="2157993821794.462646" ixy="666455430.352337" ixz="-2837984344.815198" iyz="26715280212.908405" />
+        </inertial>
+        <visual>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Cylindrical_body.obj" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Cylindrical_body.obj" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Regular_nozzle_virtual_prismatic">
+        <inertial>
+            <mass value="0.000000" />
+            <inertia ixx="0.000000" iyy="0.000000" izz="0.000000" ixy="0.000000" ixz="0.000000" iyz="0.000000" />
+        </inertial>
+        <visual>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Regular_nozzle_virtual_prismatic.obj" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Regular_nozzle_virtual_prismatic.obj" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Regular_nozzle">
+        <inertial>
+            <mass value="17054552.353245" />
+            <inertia ixx="1872465656.241512" iyy="1854014936.685182" izz="1875522065.648423" ixy="-8408285.814424" ixz="121253.656030" iyz="-3539266.350438" />
+        </inertial>
+        <visual>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Regular_nozzle.obj" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Regular_nozzle.obj" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Regular_nozzle_Head_virtual_prismatic">
+        <inertial>
+            <mass value="0.000000" />
+            <inertia ixx="0.000000" iyy="0.000000" izz="0.000000" ixy="0.000000" ixz="0.000000" iyz="0.000000" />
+        </inertial>
+        <visual>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Regular_nozzle_Head_virtual_prismatic.obj" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Regular_nozzle_Head_virtual_prismatic.obj" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Regular_nozzle_Head">
+        <inertial>
+            <mass value="11036384.013615" />
+            <inertia ixx="1975714370.186793" iyy="2084039391.160710" izz="921835860.892858" ixy="-10546185.166081" ixz="47735428.936279" iyz="106984668.891158" />
+        </inertial>
+        <visual>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Regular_nozzle_Head.obj" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Regular_nozzle_Head.obj" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="world_to_Cylindrical_body" type="fixed">
+        <parent link="world" />
+        <child link="Cylindrical_body" />
+        <origin xyz="0.000000 0.000000 92.522010" rpy="1.570796 0.000000 0.000000" />
+        <axis xyz="0.000000 0.000000 1.000000" />
+    </joint>
+    <joint name="Cylindrical_body_to_Regular_nozzle_virtual_prismatic" type="prismatic">
+        <parent link="Cylindrical_body" />
+        <child link="Regular_nozzle_virtual_prismatic" />
+        <origin xyz="-2.062248 102.010365 -1.865540" rpy="-0.017442 0.082478 0.014104" />
+        <axis xyz="0.000000 1.000000 0.000000" />
+        <limit lower="0.0" upper="0.3" effort="10" velocity="2" />
+    </joint>
+    <joint name="Regular_nozzle_virtual_prismatic_to_Regular_nozzle" type="revolute">
+        <parent link="Regular_nozzle_virtual_prismatic" />
+        <child link="Regular_nozzle" />
+        <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+        <axis xyz="0.000000 1.000000 0.000000" />
+        <limit lower="-3.141592653589793" upper="3.141592653589793" effort="10" velocity="2" />
+    </joint>
+    <joint name="Regular_nozzle_to_Regular_nozzle_Head_virtual_prismatic" type="prismatic">
+        <parent link="Regular_nozzle" />
+        <child link="Regular_nozzle_Head_virtual_prismatic" />
+        <origin xyz="-0.000000 20.938999 0.000000" rpy="0.000000 0.000000 0.000000" />
+        <axis xyz="0.000000 1.000000 0.000000" />
+        <limit lower="-0.05" upper="0.0" effort="10" velocity="2" />
+    </joint>
+    <joint name="Regular_nozzle_Head_virtual_prismatic_to_Regular_nozzle_Head" type="revolute">
+        <parent link="Regular_nozzle_Head_virtual_prismatic" />
+        <child link="Regular_nozzle_Head" />
+        <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+        <axis xyz="0.000000 1.000000 0.000000" />
+        <limit lower="-3.141592653589793" upper="3.141592653589793" effort="10" velocity="2" />
+    </joint>
+</robot>

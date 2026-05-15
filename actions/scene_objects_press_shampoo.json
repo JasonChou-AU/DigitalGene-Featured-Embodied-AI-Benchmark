@@ -1,11 +1,11 @@
 {
-    "FRANKA": {
+  "FRANKA": {
     "prim_path": "/World/Franka",
     "name": "franka",
     "POSITION": [3.5, 2.0, 0.74],
     "WXYZ": [0.70710678, 0.0, 0.0, 0.70710678],
     "SCALE": 1.0
-    },
+  },
   "OBJECTS": [
     {
       "path": "/home/zjx/project/ArtVIP/ArtVIP/Scenes/dining_room/diningroom/model_diningroom.usd",
@@ -19,13 +19,11 @@
       "ADJUSTED_WXYZ": [0.70710678, 0.0, 0.0, -0.70710678],
       "STATIC_COLLIDER": true
     },
-         {
-      "path": "/home/zjx/project/benchmark/real_object_data/Bottle/usda_output/lemon_tea_twist_off_lid.usda",
-       "ADJUSTED_POS": [3.7, 2.6, 1.1],
-       "ADJUSTED_WXYZ": [0.70710678, 0.70710678, 0.0, 0.0],
-       "SCALE": 0.2
-     }
-
-
+    {
+      "path": "/home/zjx/project/benchmark/real_object_data/Shampoo/usda_output/shampoo_press.usda",
+      "ADJUSTED_POS": [3.7, 2.6, 1.1],
+      "ADJUSTED_WXYZ": [0.70710678, 0.70710678, 0.0, 0.0],
+      "SCALE": 0.2
+    }
   ]
 }

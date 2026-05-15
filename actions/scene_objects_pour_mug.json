@@ -20,9 +20,15 @@
       "STATIC_COLLIDER": true
     },
     {
-      "path": "/home/zjx/project/benchmark/real_object_data/Mug/usda_output/Mug_conceptualization_simple_collision.usda",
-      "ADJUSTED_POS": [3.50, 2.70, 0.9],
-      "ADJUSTED_WXYZ": [0.88731, 0.46117, 0.0, 0.0],
+      "path": "/home/zjx/project/benchmark/real_object_data/Mug/usda_output/aligned_simple_collision.usda",
+      "ADJUSTED_POS": [3.8, 2.50, 0.9],
+      "ADJUSTED_WXYZ": [0.62289, 0.35172, 0.32093, 0.62073],
+      "SCALE": 0.2
+    },
+        {
+      "path": "/home/zjx/project/benchmark/real_object_data/Mug/usda_output/aligned_simple_collision.usda",
+      "ADJUSTED_POS": [3.48263, 2.8395, 0.9],
+      "ADJUSTED_WXYZ": [0.62289, 0.35172, 0.32093, 0.62073],
       "SCALE": 0.2
     }
   ]

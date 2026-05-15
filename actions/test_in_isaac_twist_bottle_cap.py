@@ -3,8 +3,8 @@ import os
 import numpy as np
 from omni.isaac.examples.base_sample import BaseSample
 
-from actions.franka_twist_bottle_cap_action import FrankaTwistBottleCapAction
-from actions.scene_object_loader import setup_scene_from_config
+from .franka_twist_bottle_cap_action import FrankaTwistBottleCapAction
+from .scene_object_loader import setup_scene_from_config
 
 
 def evaluate_twist_and_separation(
@@ -51,7 +51,7 @@ class HelloWorld(BaseSample):
 
         # Twist config
         self._target_twist_deg = 360.0
-        self._twist_segments = 18
+        self._twist_step_deg = 90.0
         self._twist_success_deg = 300.0
         self._separation_success_m = 0.04
         self._post_lift_delta_z = 0.08
@@ -64,6 +64,7 @@ class HelloWorld(BaseSample):
         self._planned_waypoints = []
         self._plan_info = None
         self._twist_wp_idx = 0
+        self._current_twist_phase = None
         self._latest_twist_deg = 0.0
 
         self._physics_cb_name = "sim_step"
@@ -107,6 +108,7 @@ class HelloWorld(BaseSample):
         self._planned_waypoints = []
         self._plan_info = None
         self._twist_wp_idx = 0
+        self._current_twist_phase = None
         self._latest_twist_deg = 0.0
         self._failure_reason = None
         self._failure_reported = False
@@ -166,7 +168,7 @@ class HelloWorld(BaseSample):
             ok = self._twist_action.plan_lid_grasp(
                 bottle_root_prim_path=self._bottle_root_path,
                 grasp_id=self._target_grasp_id,
-                pregrasp_offset=0.10,
+                pregrasp_offset=0.08,
             )
             if not ok:
                 self._failure_reason = f"grasp planning failed: {self._twist_action.last_error}"
@@ -187,18 +189,18 @@ class HelloWorld(BaseSample):
                     self._state = "TWIST_PLAN"
 
         elif self._state == "TWIST_PLAN":
-            waypoints, plan_info = self._twist_action.build_twist_waypoints(
-                lid_joint_prim_path=self._lid_joint_path,
+            phases, plan_info = self._twist_action.build_ratchet_twist_phases(
                 total_twist_deg=self._target_twist_deg,
-                segments=self._twist_segments,
+                step_twist_deg=self._twist_step_deg,
             )
-            if waypoints is None or len(waypoints) == 0:
-                self._failure_reason = f"twist waypoint planning failed: {self._twist_action.last_error}"
+            if phases is None or len(phases) == 0:
+                self._failure_reason = f"twist phase planning failed: {self._twist_action.last_error}"
                 self._state = "FAILED"
             else:
-                self._planned_waypoints = waypoints
+                self._planned_waypoints = phases
                 self._plan_info = plan_info
                 self._twist_wp_idx = 0
+                self._current_twist_phase = None
                 if not self._twist_action.reset_twist_tracking(self._lid_link_path, self._lid_joint_path):
                     self._failure_reason = f"twist tracking init failed: {self._twist_action.last_error}"
                     self._state = "FAILED"
@@ -206,9 +208,10 @@ class HelloWorld(BaseSample):
                 print(
                     "[PLAN] "
                     f"target_twist_deg={plan_info['total_twist_deg']:.2f}, "
-                    f"segments={plan_info['segments']}, "
-                    f"radial_norm={plan_info['radial_norm']:.4f}, "
-                    f"axis_world={[float(plan_info['axis_world'][0]), float(plan_info['axis_world'][1]), float(plan_info['axis_world'][2])]}"
+                    f"step_twist_deg={plan_info['step_twist_deg']:.2f}, "
+                    f"strokes={plan_info['strokes']}, "
+                    f"home_wxyz={plan_info['home_orientation'].tolist()}, "
+                    f"turned_wxyz={plan_info['turned_orientation'].tolist()}"
                 )
                 self._state = "TWIST_STEP_PLAN"
 
@@ -217,12 +220,20 @@ class HelloWorld(BaseSample):
                 self._state = "LIFT_PLAN"
                 return
 
-            target_pose = self._planned_waypoints[self._twist_wp_idx]
-            if self._twist_action.move_twist_step(target_pose):
+            phase = self._planned_waypoints[self._twist_wp_idx]
+            self._current_twist_phase = phase
+            phase_kind = phase["kind"]
+            if phase_kind in ("twist", "reset"):
+                planned = self._twist_action.move_twist_step(phase)
+            else:
+                planned = self._twist_action.queue_gripper_action(phase_kind)
+
+            if planned:
                 self._state = "TWIST_STEP_EXEC"
             else:
                 self._failure_reason = (
-                    f"twist step planning failed at idx={self._twist_wp_idx}: {self._twist_action.last_error}"
+                    f"twist phase planning failed at idx={self._twist_wp_idx}, "
+                    f"kind={phase_kind}: {self._twist_action.last_error}"
                 )
                 self._state = "FAILED"
 
@@ -230,23 +241,36 @@ class HelloWorld(BaseSample):
             if self._twist_action.step():
                 if self._twist_action.last_error is not None:
                     self._failure_reason = (
-                        f"twist step execution failed at idx={self._twist_wp_idx}: {self._twist_action.last_error}"
+                        f"twist phase execution failed at idx={self._twist_wp_idx}: {self._twist_action.last_error}"
                     )
                     self._state = "FAILED"
                 else:
-                    twist_deg = self._twist_action.get_accumulated_twist_deg(self._lid_link_path, self._lid_joint_path)
-                    if twist_deg is not None:
-                        self._latest_twist_deg = float(twist_deg)
+                    phase = self._current_twist_phase or {}
+                    phase_kind = phase.get("kind", "unknown")
+                    if phase_kind == "twist":
+                        twist_deg = self._twist_action.get_accumulated_twist_deg(
+                            self._lid_link_path,
+                            self._lid_joint_path,
+                        )
+                        if twist_deg is not None:
+                            self._latest_twist_deg = float(twist_deg)
                     print(
                         "[TWIST] "
-                        f"step={self._twist_wp_idx + 1}/{len(self._planned_waypoints)}, "
+                        f"phase={self._twist_wp_idx + 1}/{len(self._planned_waypoints)}, "
+                        f"kind={phase_kind}, "
+                        f"stroke={phase.get('stroke', '-')}, "
+                        f"target_deg={float(phase.get('accum_target_deg', self._latest_twist_deg)):.2f}, "
                         f"accum_deg={self._latest_twist_deg:.2f}"
                     )
                     self._twist_wp_idx += 1
+                    self._current_twist_phase = None
                     self._state = "TWIST_STEP_PLAN"
 
         elif self._state == "LIFT_PLAN":
-            if self._twist_action.plan_post_twist_lift(lift_delta_z=self._post_lift_delta_z):
+            if self._twist_action.plan_post_twist_lift(
+                lift_delta_z=self._post_lift_delta_z,
+                lid_joint_prim_path=self._lid_joint_path,
+            ):
                 self._state = "LIFT_EXEC"
             else:
                 self._failure_reason = f"post twist lift planning failed: {self._twist_action.last_error}"

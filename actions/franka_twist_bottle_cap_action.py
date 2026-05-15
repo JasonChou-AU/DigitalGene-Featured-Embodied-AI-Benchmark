@@ -37,6 +37,10 @@ class FrankaTwistBottleCapAction:
 
         self._cmd_plan = None
         self._cmd_progress = 0.0
+        self._joint_cmd_start_positions = None
+        self._joint_cmd_target_positions = None
+        self._joint_cmd_progress = 0
+        self._joint_cmd_steps = 45
 
         self._gripper_open_pos = self._franka.gripper.joint_opened_positions
         self._gripper_closed_pos = self._franka.gripper.joint_closed_positions
@@ -53,6 +57,9 @@ class FrankaTwistBottleCapAction:
         self._twist_axis_world = None
         self._twist_prev_vec = None
         self._twist_accum_deg = 0.0
+        self._twist_home_orientation = np.array([0.0, 0.70717, 0.70717, 0.0], dtype=np.float32)
+        self._twist_turned_orientation = np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float32)
+        self._wrist_roll_joint_idx = self._resolve_joint_index("panda_joint7", default_idx=6)
 
         self._configure_determinism()
         self._init_curobo()
@@ -70,7 +77,11 @@ class FrankaTwistBottleCapAction:
         return self._saved_approach_dir
 
     def is_busy(self):
-        return self._cmd_plan is not None or self._post_exec_action is not None
+        return (
+            self._cmd_plan is not None
+            or self._joint_cmd_target_positions is not None
+            or self._post_exec_action is not None
+        )
 
     def open_gripper(self):
         self._gripper_locked = False
@@ -83,6 +94,9 @@ class FrankaTwistBottleCapAction:
         self.open_gripper()
         self._cmd_plan = None
         self._cmd_progress = 0.0
+        self._joint_cmd_start_positions = None
+        self._joint_cmd_target_positions = None
+        self._joint_cmd_progress = 0
         self._post_exec_action = None
         self._wait_timer = 0
         self._last_error = None
@@ -97,6 +111,8 @@ class FrankaTwistBottleCapAction:
 
     def move_twist_step(self, target_pose):
         self._last_error = None
+        if isinstance(target_pose, dict) and target_pose.get("kind") in ("twist", "reset"):
+            return self._set_in_place_wrist_rotation_execution(target_pose)
         twist_profiles = [
             {"enable_graph": False, "max_attempts": 2, "time_dilation_factor": 0.12},
             {"enable_graph": False, "max_attempts": 4, "time_dilation_factor": 0.18},
@@ -107,6 +123,14 @@ class FrankaTwistBottleCapAction:
             use_collision=False,
             plan_profiles=twist_profiles,
         )
+
+    def queue_gripper_action(self, action_name):
+        if action_name not in ("open_gripper", "close_gripper"):
+            raise ValueError(f"unsupported gripper action: {action_name}")
+        self._last_error = None
+        self._post_exec_action = (action_name, None)
+        self._wait_timer = 0
+        return True
 
     def plan_lid_grasp(self, bottle_root_prim_path, grasp_id=5, pregrasp_offset=0.10):
         self._last_error = None
@@ -183,10 +207,69 @@ class FrankaTwistBottleCapAction:
         }
         return waypoints, plan_info
 
-    def plan_post_twist_lift(self, lift_delta_z=0.08):
+    def build_ratchet_twist_phases(
+        self,
+        total_twist_deg=360.0,
+        step_twist_deg=90.0,
+    ):
+        hand_pos, _, _ = self._get_hand_world_pose()
+        total_twist_deg = float(total_twist_deg)
+        step_twist_deg = float(step_twist_deg)
+        if step_twist_deg <= 0.0:
+            self._last_error = f"invalid twist step: {step_twist_deg}"
+            print(f"[ERROR] {self._last_error}")
+            return None, None
+
+        stroke_count = int(np.ceil(abs(total_twist_deg) / step_twist_deg))
+        stroke_count = max(stroke_count, 1)
+        phases = []
+        accum_deg = 0.0
+        for stroke_idx in range(stroke_count):
+            accum_deg = min(abs(total_twist_deg), accum_deg + step_twist_deg)
+            phases.append(
+                {
+                    "kind": "twist",
+                    "position": hand_pos.astype(np.float32),
+                    "orientation": self._twist_turned_orientation.copy(),
+                    "joint_delta_rad": -np.deg2rad(step_twist_deg),
+                    "stroke": stroke_idx + 1,
+                    "accum_target_deg": accum_deg,
+                }
+            )
+            phases.append({"kind": "open_gripper", "stroke": stroke_idx + 1, "accum_target_deg": accum_deg})
+            if stroke_idx < stroke_count - 1:
+                phases.append(
+                    {
+                        "kind": "reset",
+                        "position": hand_pos.astype(np.float32),
+                        "orientation": self._twist_home_orientation.copy(),
+                        "joint_delta_rad": np.deg2rad(step_twist_deg),
+                        "stroke": stroke_idx + 1,
+                        "accum_target_deg": accum_deg,
+                    }
+                )
+                phases.append({"kind": "close_gripper", "stroke": stroke_idx + 1, "accum_target_deg": accum_deg})
+
+        phases.append({"kind": "close_gripper", "stroke": stroke_count, "accum_target_deg": accum_deg})
+        plan_info = {
+            "strokes": stroke_count,
+            "total_twist_deg": abs(total_twist_deg),
+            "step_twist_deg": step_twist_deg,
+            "home_orientation": self._twist_home_orientation.copy(),
+            "turned_orientation": self._twist_turned_orientation.copy(),
+        }
+        self._last_error = None
+        return phases, plan_info
+
+    def plan_post_twist_lift(self, lift_delta_z=0.08, lid_joint_prim_path=None):
         hand_pos, hand_quat_wxyz, _ = self._get_hand_world_pose()
-        target_pos = hand_pos.copy()
-        target_pos[2] += float(lift_delta_z)
+        lift_dir = -self._saved_approach_dir.astype(np.float32)
+        lift_norm = float(np.linalg.norm(lift_dir))
+        if lift_norm < 1e-6:
+            lift_dir = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+        else:
+            lift_dir = lift_dir / lift_norm
+        target_pos = hand_pos + lift_dir * float(lift_delta_z)
         target_pose = Pose(
             position=self._tensor_args.to_device(target_pos.astype(np.float32)),
             quaternion=self._tensor_args.to_device(hand_quat_wxyz.astype(np.float32)),
@@ -264,6 +347,33 @@ class FrankaTwistBottleCapAction:
         }
 
     def step(self):
+        if self._joint_cmd_target_positions is not None:
+            alpha = min(float(self._joint_cmd_progress + 1) / float(self._joint_cmd_steps), 1.0)
+            smooth_alpha = alpha * alpha * (3.0 - 2.0 * alpha)
+            target_gripper_pos = self._gripper_closed_pos if self._gripper_locked else self._gripper_open_pos
+
+            positions = (
+                (1.0 - smooth_alpha) * self._joint_cmd_start_positions
+                + smooth_alpha * self._joint_cmd_target_positions
+            )
+            velocities = np.zeros_like(positions)
+            positions[7:] = target_gripper_pos
+
+            self._franka.apply_action(
+                ArticulationAction(
+                    joint_positions=positions,
+                    joint_velocities=velocities,
+                )
+            )
+            self._joint_cmd_progress += 1
+            if self._joint_cmd_progress < self._joint_cmd_steps:
+                return False
+
+            self._joint_cmd_start_positions = None
+            self._joint_cmd_target_positions = None
+            self._joint_cmd_progress = 0
+            return False
+
         if self._cmd_plan is not None:
             last_idx = len(self._cmd_plan.position) - 1
             if self._cmd_progress > last_idx:
@@ -310,6 +420,13 @@ class FrankaTwistBottleCapAction:
                 self._wait_timer += 1
                 if self._wait_timer > 30:
                     self._gripper_locked = True
+                    self._post_exec_action = None
+                    self._wait_timer = 0
+                return False
+            if action_name == "open_gripper":
+                self.open_gripper()
+                self._wait_timer += 1
+                if self._wait_timer > 30:
                     self._post_exec_action = None
                     self._wait_timer = 0
                 return False
@@ -370,6 +487,38 @@ class FrankaTwistBottleCapAction:
                 quaternion=self._tensor_args.to_device(quat),
             )
         raise TypeError("target_pose must be curobo Pose or {'position': [x,y,z], 'orientation': [w,x,y,z]}")
+
+    def _set_in_place_wrist_rotation_execution(self, phase):
+        if self._wrist_roll_joint_idx is None:
+            self._last_error = "panda_joint7 not found for in-place wrist rotation"
+            print(f"[ERROR] {self._last_error}")
+            return False
+
+        sim_js = self._franka.get_joints_state()
+        start_positions = np.asarray(sim_js.positions, dtype=np.float64).copy()
+        target_positions = start_positions.copy()
+        target_positions[self._wrist_roll_joint_idx] += float(phase["joint_delta_rad"])
+
+        self._cmd_plan = None
+        self._cmd_progress = 0.0
+        self._joint_cmd_start_positions = start_positions
+        self._joint_cmd_target_positions = target_positions
+        self._joint_cmd_progress = 0
+        self._last_error = None
+        print(
+            "[INFO] In-place wrist roll, "
+            f"kind={phase.get('kind')}, "
+            f"joint={self._franka.dof_names[self._wrist_roll_joint_idx]}, "
+            f"delta_deg={np.rad2deg(float(phase['joint_delta_rad'])):.2f}, "
+            f"steps={self._joint_cmd_steps}"
+        )
+        return True
+
+    def _resolve_joint_index(self, joint_name, default_idx=None):
+        try:
+            return self._franka.dof_names.index(joint_name)
+        except ValueError:
+            return default_idx
 
     def _get_grasp_world_pose(self, obj_path, grasp_id):
         stage = self._world.stage

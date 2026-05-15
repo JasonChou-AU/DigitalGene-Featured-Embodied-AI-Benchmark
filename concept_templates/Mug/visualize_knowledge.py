@@ -100,7 +100,7 @@ if __name__ == "__main__":
             return line_set
 
         gripper_mesh = o3d.io.read_triangle_mesh(gripper_stl_path)
-        gripper_mesh.scale(10, center=[0, 0, 0])
+        gripper_mesh.scale(5, center=[0, 0, 0])
         gripper_mesh.paint_uniform_color([1, 0, 0])
         gripper_mesh.compute_vertex_normals()
 
@@ -111,11 +111,10 @@ if __name__ == "__main__":
             if obj.semantic != "Handle":
                 continue
 
-            for x in np.arange(-2, 1.5, 0.5):
+            for x in np.arange(-3, -0.5, 0.5):
                 manip_params_list = [
-                    [x, -1.0, 0.0],  # radial approach (legacy-compatible mode)
-                    [x, +1.0, 0.0],  # normal-to-circle-plane approach
-                    # [x, +1.0, 0.5],  # normal approach + finger closing rotated by 180 deg
+                    [x, -1.0, 0.0],  # top horizontal mesh, in-handle-plane grasp
+                    [x, +1.0, 0.0],  # top horizontal mesh, perpendicular-to-handle-plane grasp
                 ]
                 for manip_param in manip_params_list:
                     spec = get_grasp_spec(obj, manip_param)
@@ -125,7 +124,7 @@ if __name__ == "__main__":
                     if grasp_pose.shape != (4, 4):
                         continue
     
-                    coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.3)
+                    coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05)
     
                     v = np.asarray(coord.vertices)
                     v = np.concatenate([v, np.ones((v.shape[0],1))], axis=1)

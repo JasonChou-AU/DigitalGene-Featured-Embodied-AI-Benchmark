@@ -11,9 +11,7 @@ Use this skill to create or update USDA export scripts in this repository for an
 
 Typical targets:
 
-- `concept_templates/<Category>/export_usda.py`
-- `concept_templates/<Category>/export_real_*_usda.py`
-- `concept_templates/<Category>/export_*_with_*_collision.py`
+- `concept_templates/<Category>/export_*_with_simple_collision.py`
 
 The script should export a usable USD scene prim (defaultPrim set), with visual meshes, collision, physics attributes, and task-relevant metadata (for example grasps, joints, constraints).
 

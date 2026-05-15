@@ -104,7 +104,7 @@ def _add_visual_mesh(stage, prim_path, verts, faces, scale, uvs=None, face_uvs=N
     return geom
 
 
-def _add_collision_mesh(stage, prim_path, verts, faces, scale):
+def _add_collision_mesh(stage, prim_path, verts, faces, scale, approximation="convexDecomposition"):
     geom = UsdGeom.Mesh.Define(stage, prim_path)
     verts = np.asarray(verts, dtype=np.float32) * float(scale)
     faces = np.asarray(faces, dtype=np.int32)
@@ -117,8 +117,24 @@ def _add_collision_mesh(stage, prim_path, verts, faces, scale):
     UsdGeom.Imageable(geom).CreatePurposeAttr().Set("physics")
     UsdPhysics.CollisionAPI.Apply(prim)
     UsdPhysics.MeshCollisionAPI.Apply(prim)
-    prim.CreateAttribute("physics:approximation", Sdf.ValueTypeNames.Token).Set("convexDecomposition")
+    prim.CreateAttribute("physics:approximation", Sdf.ValueTypeNames.Token).Set(approximation)
     return geom
+
+
+def _create_physics_material(stage, mat_path, static_friction=2.0, dynamic_friction=2.0, restitution=0.0):
+    mat = UsdShade.Material.Define(stage, mat_path)
+    mat_prim = mat.GetPrim()
+    mat_api = UsdPhysics.MaterialAPI.Apply(mat_prim)
+    mat_api.CreateStaticFrictionAttr().Set(float(static_friction))
+    mat_api.CreateDynamicFrictionAttr().Set(float(dynamic_friction))
+    mat_api.CreateRestitutionAttr().Set(float(restitution))
+    return mat
+
+
+def _bind_physics_material(collision_prim, physics_material):
+    UsdShade.MaterialBindingAPI(collision_prim).Bind(
+        physics_material, UsdShade.Tokens.weakerThanDescendants, "physics"
+    )
 
 
 def _bind_preview_texture(stage, mesh_prim, texture_path, mat_name):
@@ -168,11 +184,8 @@ def _pick_single_file(base_dir, candidates, pattern):
     return str(matched[0].resolve())
 
 
-def _build_simple_collision_from_concept(concept_data):
-    body_meshes = []
-    handle_meshes = []
+def _extract_handle_objs(concept_data):
     handle_objs = []
-
     for c in concept_data["conceptualization"]:
         template_name = c.get("template")
         if template_name is None:
@@ -180,25 +193,7 @@ def _build_simple_collision_from_concept(concept_data):
         obj = eval(template_name)(**c["parameters"])
         if isinstance(obj, (Trifold_Handle, Curved_Handle)):
             handle_objs.append(obj)
-            handle_meshes.append((np.asarray(obj.vertices, dtype=np.float32), np.asarray(obj.faces, dtype=np.int32)))
-        else:
-            body_meshes.append((np.asarray(obj.vertices, dtype=np.float32), np.asarray(obj.faces, dtype=np.int32)))
-
-    def _merge(mesh_list):
-        if len(mesh_list) == 0:
-            return None, None
-        v_all = []
-        f_all = []
-        offset = 0
-        for v, f in mesh_list:
-            v_all.append(v)
-            f_all.append(f + offset)
-            offset += v.shape[0]
-        return np.concatenate(v_all, axis=0), np.concatenate(f_all, axis=0)
-
-    body_v, body_f = _merge(body_meshes)
-    handle_v, handle_f = _merge(handle_meshes)
-    return body_v, body_f, handle_v, handle_f, handle_objs
+    return handle_objs
 
 
 def _export_grasps(stage, mug_root_path, handle_objs, scale_to_meters):
@@ -207,9 +202,7 @@ def _export_grasps(stage, mug_root_path, handle_objs, scale_to_meters):
 
     grasp_root_path = f"{mug_root_path}/grasps"
     UsdGeom.Xform.Define(stage, grasp_root_path)
-    test_params = [
-        (-2, -1, 0), (-2, 1, 0), (0, -1, 0), (0, 1, 0)
-    ]
+    test_params = [(-3, -1, 0), (-3, 1, 0), (0, -1, 0), (0, 1, 0)]
 
     count = 0
     for h_idx, h_obj in enumerate(handle_objs):
@@ -217,7 +210,6 @@ def _export_grasps(stage, mug_root_path, handle_objs, scale_to_meters):
             spec = get_grasp_spec(h_obj, manipulation_params=(p1, p2, p3))
             if spec is None:
                 continue
-
             if "world_position" not in spec or "world_rotation" not in spec:
                 continue
 
@@ -242,15 +234,18 @@ def _export_grasps(stage, mug_root_path, handle_objs, scale_to_meters):
     return count
 
 
-def export_with_simple_collision(
+def export_real_collision_mug(
     visual_tex_path,
     mug_obj_path,
     concept_pkl_path,
     output_usda_path,
     scale_to_meters=0.01,
-    mass_kg=0.25,
-    linear_damping=1.2,
-    angular_damping=3.0,
+    mass_kg=0.05,
+    static_friction=2.0,
+    dynamic_friction=2.0,
+    restitution=0.0,
+    linear_damping=3000.0,
+    angular_damping=3000.0,
     init_pos=(0.0, 0.2, 0.0),
     init_euler=(90.0, 0.0, 0.0),
 ):
@@ -282,24 +277,29 @@ def export_with_simple_collision(
     if angular_damping is not None:
         root_prim.CreateAttribute("physics:angularDamping", Sdf.ValueTypeNames.Float).Set(float(angular_damping))
 
-    # Real appearance (high fidelity visual)
     mug_verts, mug_faces, mug_uvs, mug_face_uvs = _load_obj_vertices_faces_uv(mug_obj_path)
     _add_visual_mesh(stage, f"{mug_root_path}/visual", mug_verts, mug_faces, scale_to_meters, mug_uvs, mug_face_uvs)
     _bind_preview_texture(stage, stage.GetPrimAtPath(f"{mug_root_path}/visual"), visual_tex_path, "MugMat")
 
-    # Simple collision from conceptualization
+    physics_mat = _create_physics_material(
+        stage,
+        f"{mug_root_path}/Looks/HighFrictionPhysics",
+        static_friction=static_friction,
+        dynamic_friction=dynamic_friction,
+        restitution=restitution,
+    )
+    collision = _add_collision_mesh(stage, f"{mug_root_path}/collision", mug_verts, mug_faces, scale_to_meters)
+    _bind_physics_material(collision.GetPrim(), physics_mat)
+
     concept_data = _load_concept_from_pkl(concept_pkl_path)
-    simple_body_v, simple_body_f, simple_handle_v, simple_handle_f, handle_objs = _build_simple_collision_from_concept(concept_data)
-
-    if simple_body_v is not None and simple_body_f is not None:
-        _add_collision_mesh(stage, f"{mug_root_path}/body/collision", simple_body_v, simple_body_f, scale_to_meters)
-    if simple_handle_v is not None and simple_handle_f is not None:
-        _add_collision_mesh(stage, f"{mug_root_path}/handle/collision", simple_handle_v, simple_handle_f, scale_to_meters)
-
-    _export_grasps(stage, mug_root_path, handle_objs, scale_to_meters)
+    _export_grasps(stage, mug_root_path, _extract_handle_objs(concept_data), scale_to_meters)
 
     stage.GetRootLayer().Save()
     return output_usda_path
+
+
+def export_with_real_collision(*args, **kwargs):
+    return export_real_collision_mug(*args, **kwargs)
 
 
 def main():
@@ -314,26 +314,29 @@ def main():
     )
     mug_obj = _pick_single_file(
         data_dir,
-        candidates=["segmentation/Mug_aligned.obj"],
+        candidates=["segmentation/Mug.obj"],
         pattern="**/*.obj",
     )
     concept_pkl = _pick_single_file(
         data_dir,
-        candidates=["conceptualization/aligned.pkl"],
+        candidates=["conceptualization/Mug_conceptualization.pkl"],
         pattern="**/conceptualization/*.pkl",
     )
-    output_name = f"{Path(concept_pkl).stem}_simple_collision.usda"
+    output_name = f"{Path(concept_pkl).stem}_real_collision.usda"
     output_usda = os.path.join(data_dir, "usda_output", output_name)
 
-    out = export_with_simple_collision(
+    out = export_real_collision_mug(
         visual_tex_path=visual_tex,
         mug_obj_path=mug_obj,
         concept_pkl_path=concept_pkl,
         output_usda_path=output_usda,
-        scale_to_meters=1,
+        scale_to_meters=0.01,
         mass_kg=0.05,
-        linear_damping=3000,
-        angular_damping=3000,
+        static_friction=2.0,
+        dynamic_friction=2.0,
+        restitution=0.0,
+        linear_damping=3000.0,
+        angular_damping=3000.0,
         init_pos=[0.0, 0.2, 0.0],
         init_euler=[90.0, 0.0, 0.0],
     )

@@ -1,0 +1,73 @@
+[
+  {
+    "category": "Mug",
+    "id": "Mug_aligned",
+    "type": "mesh",
+    "conceptualization": [
+      {
+        "template": "Cylindrical_Body",
+        "parameters": {
+          "position": [
+            0.009926,
+            -0.006836,
+            -0.116925
+          ],
+          "rotation": [
+            34.301823,
+            1.578707,
+            -3.244806
+          ],
+          "outer_size": [
+            0.423,
+            0.416,
+            0.927
+          ],
+          "inner_size": [
+            0.373,
+            0.211,
+            0.624
+          ]
+        },
+        "component": "body"
+      },
+      {
+        "template": "Trifold_Handle",
+        "parameters": {
+          "position": [
+            0.002201,
+            -0.134041,
+            0.231479
+          ],
+          "rotation": [
+            32.035042,
+            -1.489251,
+            -3.113571
+          ],
+          "horizontal_thickness": [
+            0.094,
+            0.054
+          ],
+          "horizontal_length": [
+            0.343,
+            0.333
+          ],
+          "vertical_thickness": [
+            0.053,
+            0.062
+          ],
+          "horizontal_rotation": [
+            0,
+            -21.386999
+          ],
+          "horizontal_separation": [
+            0.64
+          ],
+          "mounting_offset": [
+            0.079
+          ]
+        },
+        "component": "handle"
+      }
+    ]
+  }
+]

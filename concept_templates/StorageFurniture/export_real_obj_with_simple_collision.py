@@ -170,6 +170,9 @@ def _create_link_xform(
 
 
 def _split_mesh_by_face_blocks(overall_mesh, faces_per_part, num_parts):
+    if isinstance(faces_per_part, (list, tuple, np.ndarray)):
+        return _split_mesh_by_face_counts(overall_mesh, faces_per_part)
+
     vertices = np.asarray(overall_mesh.vertices, dtype=np.float32)
     faces = np.asarray(overall_mesh.faces, dtype=np.int32)
     parts = []
@@ -192,6 +195,40 @@ def _split_mesh_by_face_blocks(overall_mesh, faces_per_part, num_parts):
         cursor = end
 
     return parts
+
+
+def _split_mesh_by_face_counts(overall_mesh, face_counts):
+    vertices = np.asarray(overall_mesh.vertices, dtype=np.float32)
+    faces = np.asarray(overall_mesh.faces, dtype=np.int32)
+    parts = []
+    cursor = 0
+    for face_count in face_counts:
+        start = cursor
+        end = min(cursor + int(face_count), len(faces))
+        part_faces_global = faces[start:end]
+        if len(part_faces_global) == 0:
+            parts.append((np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.int32)))
+            cursor = end
+            continue
+
+        unique_vids = np.unique(part_faces_global.reshape(-1))
+        part_verts = vertices[unique_vids]
+        mapping = -np.ones((len(vertices),), dtype=np.int32)
+        mapping[unique_vids] = np.arange(len(unique_vids), dtype=np.int32)
+        part_faces = mapping[part_faces_global]
+        parts.append((part_verts, part_faces))
+        cursor = end
+
+    return parts
+
+
+def _drawer_face_counts(template_name, drawer_obj):
+    face_counts = []
+    handle_mesh_count = 3 if template_name == "Drawer_with_U_handle" else 1
+    for drawer_idx in range(drawer_obj.number_of_drawer[0]):
+        cuboid_count = 6 + handle_mesh_count * int(drawer_obj.number_of_handle[drawer_idx])
+        face_counts.append(12 * cuboid_count)
+    return face_counts
 
 
 def _drawer_joint_limits(part, drawer_idx):
@@ -505,10 +542,8 @@ def export_with_simple_collision(
 
     for template_name, obj in components:
         if template_name in ("Regular_drawer", "Drawer_with_U_handle"):
+            parts = _split_mesh_by_face_blocks(obj.overall_obj_mesh, _drawer_face_counts(template_name, obj), obj.number_of_drawer[0])
             for drawer_idx in range(obj.number_of_drawer[0]):
-                cuboid_count = 6 + int(obj.number_of_handle[drawer_idx])
-                drawer_faces = 12 * cuboid_count
-                parts = _split_mesh_by_face_blocks(obj.overall_obj_mesh, drawer_faces, obj.number_of_drawer[0])
                 verts, faces = parts[drawer_idx]
                 if len(verts) == 0:
                     continue

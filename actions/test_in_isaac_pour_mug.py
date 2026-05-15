@@ -1,5 +1,6 @@
 import os
 
+import numpy as np
 from omni.isaac.examples.base_sample import BaseSample
 
 from .franka_pour_mug_action import FrankaPourMugAction
@@ -23,14 +24,20 @@ class HelloWorld(BaseSample):
         self._settle_counter = 0
 
         self._world = None
+        self._franka = None
+        self._franka_cfg = None
         self._pour_action = None
 
         self._scene_config_path = os.path.join(os.path.dirname(__file__), "scene_objects_pour_mug.json")
         self._object_prim_path_map = {}
 
         self._target_object_id = 3
-        self._target_grasp_id = 1
-        self._lift_delta_z = 0.3
+        self._target_grasp_id = 0
+        self._target_position = np.array([3.5, 2.70, 1.3], dtype=np.float32)
+        self._pour_angle_deg = 90.0
+        self._pour_steps = 160
+        self._pre_pour_wait_sec = 1.0
+        self._pre_pour_wait_timer = 0.0
         self._downward_success_threshold_deg = 20.0
 
         self._physics_cb_name = "sim_step"
@@ -43,11 +50,20 @@ class HelloWorld(BaseSample):
         world.scene.add_default_ground_plane()
         setup_result = setup_scene_from_config(world, self._scene_config_path)
         self._franka = setup_result["franka"]
+        self._franka_cfg = setup_result["franka_cfg"]
         self._object_prim_path_map = setup_result["object_prim_path_map"]
 
     async def setup_post_load(self):
         self._world = self.get_world()
         self._franka = self._world.scene.get_object("franka")
+        if self._franka is None:
+            setup_result = setup_scene_from_config(self._world, self._scene_config_path)
+            self._franka = setup_result["franka"]
+            self._franka_cfg = setup_result["franka_cfg"]
+            self._object_prim_path_map = setup_result["object_prim_path_map"]
+            await self._world.reset_async()
+            self._franka = self._world.scene.get_object("franka") or self._franka
+
         self._pour_action = FrankaPourMugAction(world=self._world, franka=self._franka)
         self._pour_action.open_gripper()
 
@@ -69,6 +85,7 @@ class HelloWorld(BaseSample):
     def _reset_state_vars(self):
         self._state = "WAIT"
         self._settle_counter = 0
+        self._pre_pour_wait_timer = 0.0
         self._failure_reason = None
         self._failure_reported = False
 
@@ -87,6 +104,12 @@ class HelloWorld(BaseSample):
         self._world.add_physics_callback(self._physics_cb_name, self.physics_step)
         self._physics_cb_registered = True
 
+    def _get_target_pose(self, target_position):
+        return {
+            "position": target_position.astype(np.float32),
+            "orientation": self._pour_action.saved_grasp_orientation.astype(np.float32),
+        }
+
     def _report_eval(self):
         downward_angle_deg = self._pour_action.get_gripper_downward_angle_deg()
         eval_res = evaluate_pour_downward(
@@ -97,7 +120,9 @@ class HelloWorld(BaseSample):
             "[EVAL] "
             f"success={eval_res['success']}, "
             f"downward_angle_deg={eval_res['downward_angle_deg']:.3f}, "
-            f"threshold_deg={eval_res['success_threshold_deg']:.3f}"
+            f"threshold_deg={eval_res['success_threshold_deg']:.3f}, "
+            f"target_position={self._target_position.tolist()}, "
+            f"pour_angle_deg={self._pour_angle_deg:.3f}"
         )
 
     def physics_step(self, step_size):
@@ -129,30 +154,45 @@ class HelloWorld(BaseSample):
                     self._failure_reason = f"grasp execution failed: {self._pour_action.last_error}"
                     self._state = "FAILED"
                 else:
-                    self._state = "LIFT_PLAN"
+                    self._state = "MOVE_PLAN"
 
-        elif self._state == "LIFT_PLAN":
-            if self._pour_action.plan_lift(lift_delta_z=self._lift_delta_z):
-                print(f"[STATE] LIFT_PLAN ok: lift_delta_z={self._lift_delta_z:.3f}")
-                self._state = "LIFT_EXEC"
+        elif self._state == "MOVE_PLAN":
+            target_pose = self._get_target_pose(self._target_position)
+            if self._pour_action.move(target_pose=target_pose, use_curobo=True):
+                print(
+                    "[STATE] MOVE_PLAN ok: "
+                    f"target_position={self._target_position.tolist()}, "
+                    f"saved_grasp_orientation={target_pose['orientation'].tolist()}"
+                )
+                self._state = "MOVE_EXEC"
             else:
-                self._failure_reason = f"lift planning failed: {self._pour_action.last_error}"
+                self._failure_reason = f"move with CuRobo failed: {self._pour_action.last_error}"
                 self._state = "FAILED"
 
-        elif self._state == "LIFT_EXEC":
+        elif self._state == "MOVE_EXEC":
             if self._pour_action.step():
                 if self._pour_action.last_error is not None:
-                    self._failure_reason = f"lift execution failed: {self._pour_action.last_error}"
+                    self._failure_reason = f"move execution failed: {self._pour_action.last_error}"
                     self._state = "FAILED"
                 else:
-                    self._state = "POUR_PLAN"
+                    self._pre_pour_wait_timer = 0.0
+                    print(f"[STATE] MOVE_EXEC done: waiting {self._pre_pour_wait_sec:.3f}s before pour.")
+                    self._state = "POUR_WAIT"
+
+        elif self._state == "POUR_WAIT":
+            self._pre_pour_wait_timer += float(step_size)
+            if self._pre_pour_wait_timer >= self._pre_pour_wait_sec:
+                self._state = "POUR_PLAN"
 
         elif self._state == "POUR_PLAN":
-            if self._pour_action.plan_pour_orientation_down(keep_position=True, disable_collision=True):
-                print("[STATE] POUR_PLAN ok: target=gripper approach -> world -Z")
+            if self._pour_action.pour(angle_deg=self._pour_angle_deg, steps=self._pour_steps):
+                print(
+                    "[STATE] POUR_PLAN ok: "
+                    f"angle_deg={self._pour_angle_deg:.3f}, steps={self._pour_steps}"
+                )
                 self._state = "POUR_EXEC"
             else:
-                self._failure_reason = f"pour orientation planning failed: {self._pour_action.last_error}"
+                self._failure_reason = f"pour wrist rotation failed: {self._pour_action.last_error}"
                 self._state = "FAILED"
 
         elif self._state == "POUR_EXEC":
@@ -177,3 +217,4 @@ class HelloWorld(BaseSample):
                 self._failure_reported = True
                 self._remove_physics_callback()
             self._world.pause()
+

@@ -1,0 +1,78 @@
+<?xml version='1.0' encoding='utf-8'?>
+<robot name="Bottle">
+    <link name="world" />
+    <link name="Multilevel_Body">
+        <inertial>
+            <mass value="0.518496" />
+            <inertia ixx="0.001613" iyy="0.000243" izz="0.001614" ixy="-0.000008" ixz="0.000001" iyz="-0.000005" />
+        </inertial>
+        <visual>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Multilevel_Body.obj" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Multilevel_Body.obj" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Cylindrical_Lid_virtual_prismatic">
+        <inertial>
+            <mass value="0.000000" />
+            <inertia ixx="0.000000" iyy="0.000000" izz="0.000000" ixy="0.000000" ixz="0.000000" iyz="0.000000" />
+        </inertial>
+        <visual>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Cylindrical_Lid_virtual_prismatic.obj" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Cylindrical_Lid_virtual_prismatic.obj" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Cylindrical_Lid">
+        <inertial>
+            <mass value="0.011375" />
+            <inertia ixx="0.000001" iyy="0.000001" izz="0.000001" ixy="0.000000" ixz="-0.000000" iyz="0.000000" />
+        </inertial>
+        <visual>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Cylindrical_Lid.obj" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000" />
+            <geometry>
+                <mesh filename="meshes/Cylindrical_Lid.obj" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="world_to_Multilevel_Body" type="fixed">
+        <parent link="world" />
+        <child link="Multilevel_Body" />
+        <origin xyz="0.000000 0.000000 0.007406" rpy="1.570796 -0.000000 0.000000" />
+        <axis xyz="0.000000 0.000000 1.000000" />
+    </joint>
+    <joint name="Multilevel_Body_to_Cylindrical_Lid_virtual_prismatic" type="prismatic">
+        <parent link="Multilevel_Body" />
+        <child link="Cylindrical_Lid_virtual_prismatic" />
+        <origin xyz="0.000111 0.202579 0.000029" rpy="0.000000 -0.000000 0.000000" />
+        <axis xyz="0.000000 1.000000 0.000000" />
+        <limit lower="0.0" upper="0.1" effort="10" velocity="2" />
+    </joint>
+    <joint name="Cylindrical_Lid_virtual_prismatic_to_Cylindrical_Lid" type="revolute">
+        <parent link="Cylindrical_Lid_virtual_prismatic" />
+        <child link="Cylindrical_Lid" />
+        <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 -0.000000 0.000000" />
+        <axis xyz="0.000000 1.000000 0.000000" />
+        <limit lower="-3.141592653589793" upper="3.141592653589793" effort="10" velocity="2" />
+    </joint>
+</robot>

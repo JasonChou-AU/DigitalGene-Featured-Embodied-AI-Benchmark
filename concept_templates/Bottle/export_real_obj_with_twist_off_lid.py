@@ -27,6 +27,13 @@ def _set_initial_pose(prim_xform, position, euler_deg):
     prim_xform.AddOrientOp().Set(quat_usd)
 
 
+def _set_identity_xform(prim_xform):
+    prim_xform.ClearXformOpOrder()
+    prim_xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.0))
+    prim_xform.AddOrientOp().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+    prim_xform.AddScaleOp().Set(Gf.Vec3f(1.0, 1.0, 1.0))
+
+
 def _load_obj_vertices_faces_uv(path):
     verts = []
     uvs = []
@@ -88,6 +95,10 @@ def _add_visual_mesh(stage, prim_path, verts, faces, scale, uvs=None, face_uvs=N
     geom.CreatePointsAttr([_to_vec3f(v) for v in verts])
     geom.CreateFaceVertexCountsAttr([3] * len(faces))
     geom.CreateFaceVertexIndicesAttr(faces.flatten().tolist())
+    geom.CreateExtentAttr([
+        _to_vec3f(np.min(verts, axis=0)),
+        _to_vec3f(np.max(verts, axis=0)),
+    ])
 
     if uvs is not None and face_uvs is not None and len(uvs) > 0 and len(face_uvs) == len(faces):
         st_data = []
@@ -104,6 +115,37 @@ def _add_visual_mesh(stage, prim_path, verts, faces, scale, uvs=None, face_uvs=N
     return geom
 
 
+def _copy_visual_mesh(stage, prim_path, source_mesh):
+    geom = UsdGeom.Mesh.Define(stage, prim_path)
+    geom.CreatePointsAttr(source_mesh.GetPointsAttr().Get())
+    geom.CreateFaceVertexCountsAttr(source_mesh.GetFaceVertexCountsAttr().Get())
+    geom.CreateFaceVertexIndicesAttr(source_mesh.GetFaceVertexIndicesAttr().Get())
+
+    points = source_mesh.GetPointsAttr().Get()
+    if points:
+        verts = np.asarray([[p[0], p[1], p[2]] for p in points], dtype=np.float32)
+        geom.CreateExtentAttr([
+            _to_vec3f(np.min(verts, axis=0)),
+            _to_vec3f(np.max(verts, axis=0)),
+        ])
+
+    source_primvars = UsdGeom.PrimvarsAPI(source_mesh.GetPrim())
+    dest_primvars = UsdGeom.PrimvarsAPI(geom.GetPrim())
+    for source_pv in source_primvars.GetPrimvars():
+        name = source_pv.GetBaseName()
+        if name != "st":
+            continue
+        dest_pv = dest_primvars.CreatePrimvar(
+            name,
+            source_pv.GetTypeName(),
+            source_pv.GetInterpolation(),
+        )
+        dest_pv.Set(source_pv.Get())
+        if source_pv.GetIndicesAttr().IsValid():
+            dest_pv.SetIndices(source_pv.GetIndices())
+    return geom
+
+
 def _add_collision_mesh(stage, prim_path, verts, faces, scale):
     geom = UsdGeom.Mesh.Define(stage, prim_path)
     verts = np.asarray(verts, dtype=np.float32) * float(scale)
@@ -112,6 +154,10 @@ def _add_collision_mesh(stage, prim_path, verts, faces, scale):
     geom.CreatePointsAttr([_to_vec3f(v) for v in verts])
     geom.CreateFaceVertexCountsAttr([3] * len(faces))
     geom.CreateFaceVertexIndicesAttr(faces.flatten().tolist())
+    geom.CreateExtentAttr([
+        _to_vec3f(np.min(verts, axis=0)),
+        _to_vec3f(np.max(verts, axis=0)),
+    ])
 
     prim = geom.GetPrim()
     UsdGeom.Imageable(geom).CreatePurposeAttr().Set("physics")
@@ -254,6 +300,36 @@ def _apply_rigid_body(prim, mass_kg):
     prim.CreateAttribute("physics:mass", Sdf.ValueTypeNames.Float).Set(float(mass_kg))
 
 
+def _create_link_xform(stage, link_path, mass_kg):
+    link = UsdGeom.Xform.Define(stage, link_path)
+    _set_identity_xform(link)
+    _apply_rigid_body(link.GetPrim(), mass_kg=mass_kg)
+    return link
+
+
+def _apply_articulation_root(prim):
+    UsdPhysics.ArticulationRootAPI.Apply(prim)
+
+
+def _disable_collision_between_prims(stage, prim_paths):
+    valid_paths = []
+    for p in prim_paths:
+        prim = stage.GetPrimAtPath(p)
+        if prim.IsValid():
+            valid_paths.append(p)
+
+    for i, path_i in enumerate(valid_paths):
+        prim_i = stage.GetPrimAtPath(path_i)
+        rel = prim_i.GetRelationship("physics:filteredPairs")
+        if not rel.IsValid():
+            rel = prim_i.CreateRelationship("physics:filteredPairs", False)
+        targets = set(rel.GetTargets())
+        for j, path_j in enumerate(valid_paths):
+            if i != j:
+                targets.add(Sdf.Path(path_j))
+        rel.SetTargets(sorted(targets, key=lambda p: str(p)))
+
+
 def _get_lid_axis_and_anchor(lid_obj):
     if lid_obj is None:
         return np.array([0.0, 1.0, 0.0], dtype=np.float64), np.array([0.0, 0.0, 0.0], dtype=np.float64)
@@ -283,17 +359,15 @@ def _quatf_rotate_x_to(axis_vec):
 def _create_twist_off_joint(
     stage,
     joint_path,
-    body_path,
+    parent_link_path,
     lid_path,
     joint_anchor,
     joint_axis,
     lower_limit_deg,
     upper_limit_deg,
-    break_torque,
-    break_force,
 ):
     joint = UsdPhysics.RevoluteJoint.Define(stage, joint_path)
-    joint.CreateBody0Rel().SetTargets([Sdf.Path(body_path)])
+    joint.CreateBody0Rel().SetTargets([Sdf.Path(parent_link_path)])
     joint.CreateBody1Rel().SetTargets([Sdf.Path(lid_path)])
 
     joint.CreateAxisAttr().Set("X")
@@ -305,42 +379,84 @@ def _create_twist_off_joint(
 
     joint.CreateLowerLimitAttr().Set(float(lower_limit_deg))
     joint.CreateUpperLimitAttr().Set(float(upper_limit_deg))
-    joint.CreateBreakTorqueAttr().Set(float(break_torque))
-    joint.CreateBreakForceAttr().Set(float(break_force))
     joint.CreateCollisionEnabledAttr().Set(False)
+    return joint
 
-    # Keep the joint out of articulation so breakTorque is honored.
-    joint.CreateExcludeFromArticulationAttr().Set(True)
+
+def _create_prismatic_joint(
+    stage,
+    joint_path,
+    parent_link_path,
+    child_link_path,
+    joint_anchor,
+    joint_axis,
+    lower_limit_m,
+    upper_limit_m,
+):
+    joint = UsdPhysics.PrismaticJoint.Define(stage, joint_path)
+    joint.CreateBody0Rel().SetTargets([Sdf.Path(parent_link_path)])
+    joint.CreateBody1Rel().SetTargets([Sdf.Path(child_link_path)])
+
+    joint.CreateAxisAttr().Set("X")
+    joint_rot = _quatf_rotate_x_to(joint_axis)
+    joint.CreateLocalPos0Attr().Set(_to_vec3f(joint_anchor))
+    joint.CreateLocalPos1Attr().Set(_to_vec3f(joint_anchor))
+    joint.CreateLocalRot0Attr().Set(joint_rot)
+    joint.CreateLocalRot1Attr().Set(joint_rot)
+
+    joint.CreateLowerLimitAttr().Set(float(lower_limit_m))
+    joint.CreateUpperLimitAttr().Set(float(upper_limit_m))
+    joint.CreateCollisionEnabledAttr().Set(False)
+    return joint
+
+
+def _create_fixed_joint(stage, joint_path, child_link_path):
+    joint = UsdPhysics.FixedJoint.Define(stage, joint_path)
+    joint.CreateBody1Rel().SetTargets([Sdf.Path(child_link_path)])
+    joint.CreateLocalPos0Attr().Set(_to_vec3f((0.0, 0.0, 0.0)))
+    joint.CreateLocalPos1Attr().Set(_to_vec3f((0.0, 0.0, 0.0)))
+    joint.CreateLocalRot0Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+    joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+    joint.CreateCollisionEnabledAttr().Set(False)
+    return joint
 
 
 def export_with_twist_off_lid(
     visual_tex_path,
     body_obj_path,
+    prismatic_obj_path,
     lid_obj_path,
     concept_pkl_path,
     output_usda_path,
+    source_visual_usda_path=None,
     scale_to_meters=0.01,
-    body_mass_kg=0.08,
-    lid_mass_kg=0.02,
+    body_mass_kg=0.518496,
+    prismatic_mass_kg=1.0e-6,
+    lid_mass_kg=0.011375,
     static_friction=1.2,
     dynamic_friction=1.0,
     restitution=0.0,
-    lid_joint_lower_limit_deg=0.0,
+    lid_lift_lower_limit_m=0.0,
+    lid_lift_upper_limit_m=0.15,
+    lid_joint_lower_limit_deg=-360.0,
     lid_joint_upper_limit_deg=360.0,
-    lid_joint_break_torque=0.25,
-    lid_joint_break_force=1000.0,
     init_pos=(0.0, 0.2, 0.0),
     init_euler=(90.0, 0.0, 0.0),
 ):
     visual_tex_path = os.path.abspath(visual_tex_path)
     body_obj_path = os.path.abspath(body_obj_path)
+    prismatic_obj_path = os.path.abspath(prismatic_obj_path)
     lid_obj_path = os.path.abspath(lid_obj_path)
     concept_pkl_path = os.path.abspath(concept_pkl_path)
     output_usda_path = os.path.abspath(output_usda_path)
+    if source_visual_usda_path is not None:
+        source_visual_usda_path = os.path.abspath(source_visual_usda_path)
 
-    for p in [visual_tex_path, body_obj_path, lid_obj_path, concept_pkl_path]:
+    for p in [visual_tex_path, body_obj_path, prismatic_obj_path, lid_obj_path, concept_pkl_path]:
         if not os.path.exists(p):
             raise FileNotFoundError(p)
+    if source_visual_usda_path is not None and not os.path.exists(source_visual_usda_path):
+        raise FileNotFoundError(source_visual_usda_path)
 
     os.makedirs(os.path.dirname(output_usda_path), exist_ok=True)
     stage = Usd.Stage.CreateNew(output_usda_path)
@@ -351,6 +467,10 @@ def export_with_twist_off_lid(
     root = UsdGeom.Xform.Define(stage, bottle_root_path)
     stage.SetDefaultPrim(root.GetPrim())
     _set_initial_pose(root, init_pos, init_euler)
+    _apply_articulation_root(root.GetPrim())
+
+    concept_data = _load_concept_from_pkl(concept_pkl_path)
+    root.GetPrim().CreateAttribute("dataset:id", Sdf.ValueTypeNames.String).Set(str(concept_data.get("id", "unknown")))
 
     links_path = f"{bottle_root_path}/links"
     joints_path = f"{bottle_root_path}/joints"
@@ -358,24 +478,37 @@ def export_with_twist_off_lid(
     UsdGeom.Xform.Define(stage, joints_path)
 
     body_link_path = f"{links_path}/body_link"
+    prismatic_link_path = f"{links_path}/lid_prismatic_link"
     lid_link_path = f"{links_path}/lid_link"
-    body_link = UsdGeom.Xform.Define(stage, body_link_path)
-    lid_link = UsdGeom.Xform.Define(stage, lid_link_path)
-    _apply_rigid_body(body_link.GetPrim(), mass_kg=body_mass_kg)
-    _apply_rigid_body(lid_link.GetPrim(), mass_kg=lid_mass_kg)
+    body_link = _create_link_xform(stage, body_link_path, mass_kg=body_mass_kg)
+    _ = body_link
+    _create_link_xform(stage, prismatic_link_path, mass_kg=prismatic_mass_kg)
+    _create_link_xform(stage, lid_link_path, mass_kg=lid_mass_kg)
 
-    # Real appearance (high fidelity visual)
-    body_verts, body_faces, body_uvs, body_face_uvs = _load_obj_vertices_faces_uv(body_obj_path)
-    lid_verts, lid_faces, lid_uvs, lid_face_uvs = _load_obj_vertices_faces_uv(lid_obj_path)
+    # Real appearance (high fidelity visual). Prefer the simple-collision USDA,
+    # which already has the correct global Bottle UV layout.
+    copied_visuals = False
+    if source_visual_usda_path is not None:
+        source_stage = Usd.Stage.Open(source_visual_usda_path)
+        if source_stage is None:
+            raise RuntimeError(f"cannot open source visual USDA: {source_visual_usda_path}")
+        source_body = UsdGeom.Mesh(source_stage.GetPrimAtPath("/Bottle/body/visual"))
+        source_lid = UsdGeom.Mesh(source_stage.GetPrimAtPath("/Bottle/lid/visual"))
+        if source_body and source_lid:
+            _copy_visual_mesh(stage, f"{body_link_path}/visual", source_body)
+            _copy_visual_mesh(stage, f"{lid_link_path}/visual", source_lid)
+            copied_visuals = True
 
-    _add_visual_mesh(stage, f"{body_link_path}/visual", body_verts, body_faces, scale_to_meters, body_uvs, body_face_uvs)
+    if not copied_visuals:
+        body_verts, body_faces, body_uvs, body_face_uvs = _load_obj_vertices_faces_uv(body_obj_path)
+        lid_verts, lid_faces, lid_uvs, lid_face_uvs = _load_obj_vertices_faces_uv(lid_obj_path)
+        _add_visual_mesh(stage, f"{body_link_path}/visual", body_verts, body_faces, scale_to_meters, body_uvs, body_face_uvs)
+        _add_visual_mesh(stage, f"{lid_link_path}/visual", lid_verts, lid_faces, scale_to_meters, lid_uvs, lid_face_uvs)
+
     _bind_preview_texture(stage, stage.GetPrimAtPath(f"{body_link_path}/visual"), visual_tex_path, "BottleBodyMat")
-
-    _add_visual_mesh(stage, f"{lid_link_path}/visual", lid_verts, lid_faces, scale_to_meters, lid_uvs, lid_face_uvs)
     _bind_preview_texture(stage, stage.GetPrimAtPath(f"{lid_link_path}/visual"), visual_tex_path, "BottleLidMat")
 
     # Simple collision from conceptualization
-    concept_data = _load_concept_from_pkl(concept_pkl_path)
     simple_body_v, simple_body_f, simple_lid_v, simple_lid_f, lid_obj = _build_simple_collision_from_concept(concept_data)
     physics_mat = _create_physics_material(
         stage,
@@ -385,27 +518,44 @@ def export_with_twist_off_lid(
         restitution=restitution,
     )
 
+    collision_prim_paths = []
     if simple_body_v is not None and simple_body_f is not None:
-        body_col = _add_collision_mesh(stage, f"{body_link_path}/collision", simple_body_v, simple_body_f, scale_to_meters)
+        body_collision_path = f"{body_link_path}/collision"
+        body_col = _add_collision_mesh(stage, body_collision_path, simple_body_v, simple_body_f, scale_to_meters)
         _bind_physics_material(body_col.GetPrim(), physics_mat)
+        collision_prim_paths.append(body_collision_path)
     if simple_lid_v is not None and simple_lid_f is not None:
-        lid_col = _add_collision_mesh(stage, f"{lid_link_path}/collision", simple_lid_v, simple_lid_f, scale_to_meters)
+        lid_collision_path = f"{lid_link_path}/collision"
+        lid_col = _add_collision_mesh(stage, lid_collision_path, simple_lid_v, simple_lid_f, scale_to_meters)
         _bind_physics_material(lid_col.GetPrim(), physics_mat)
+        collision_prim_paths.append(lid_collision_path)
 
     lid_axis_local, lid_anchor_local = _get_lid_axis_and_anchor(lid_obj)
+    lid_anchor_local_scaled = lid_anchor_local * float(scale_to_meters)
+
+    _create_fixed_joint(stage, f"{joints_path}/world_to_body_joint", body_link_path)
+    _create_prismatic_joint(
+        stage=stage,
+        joint_path=f"{joints_path}/lid_lift_joint",
+        parent_link_path=body_link_path,
+        child_link_path=prismatic_link_path,
+        joint_anchor=lid_anchor_local_scaled,
+        joint_axis=lid_axis_local,
+        lower_limit_m=lid_lift_lower_limit_m,
+        upper_limit_m=lid_lift_upper_limit_m,
+    )
     _create_twist_off_joint(
         stage=stage,
         joint_path=f"{joints_path}/lid_twist_joint",
-        body_path=body_link_path,
+        parent_link_path=prismatic_link_path,
         lid_path=lid_link_path,
-        joint_anchor=lid_anchor_local * float(scale_to_meters),
+        joint_anchor=lid_anchor_local_scaled,
         joint_axis=lid_axis_local,
         lower_limit_deg=lid_joint_lower_limit_deg,
         upper_limit_deg=lid_joint_upper_limit_deg,
-        break_torque=lid_joint_break_torque,
-        break_force=lid_joint_break_force,
     )
 
+    _disable_collision_between_prims(stage, collision_prim_paths)
     _export_grasps(stage, bottle_root_path, lid_obj, scale_to_meters)
 
     stage.GetRootLayer().Save()
@@ -424,18 +574,28 @@ def main():
     )
     body_obj = _pick_single_file(
         data_dir,
-        candidates=["segmentation/body.obj"],
-        pattern="**/body.obj",
+        candidates=["segmentation/Multilevel_Body.obj"],
+        pattern="**/Multilevel_Body.obj",
+    )
+    prismatic_obj = _pick_single_file(
+        data_dir,
+        candidates=["segmentation/Cylindrical_Lid_virtual_prismatic.obj"],
+        pattern="**/Cylindrical_Lid_virtual_prismatic.obj",
     )
     lid_obj = _pick_single_file(
         data_dir,
-        candidates=["segmentation/lid.obj"],
-        pattern="**/lid.obj",
+        candidates=["segmentation/Cylindrical_Lid.obj"],
+        pattern="**/Cylindrical_Lid.obj",
     )
     concept_pkl = _pick_single_file(
         data_dir,
         candidates=["conceptualization/lemon_tea.pkl"],
         pattern="**/conceptualization/*.pkl",
+    )
+    source_visual_usda = _pick_single_file(
+        data_dir,
+        candidates=["usda_output/lemon_tea_simple_collision.usda"],
+        pattern="**/*simple_collision.usda",
     )
     output_name = f"{Path(concept_pkl).stem}_twist_off_lid.usda"
     output_usda = os.path.join(data_dir, "usda_output", output_name)
@@ -443,19 +603,22 @@ def main():
     out = export_with_twist_off_lid(
         visual_tex_path=visual_tex,
         body_obj_path=body_obj,
+        prismatic_obj_path=prismatic_obj,
         lid_obj_path=lid_obj,
         concept_pkl_path=concept_pkl,
         output_usda_path=output_usda,
+        source_visual_usda_path=source_visual_usda,
         scale_to_meters=0.01,
-        body_mass_kg=0.08,
-        lid_mass_kg=0.02,
+        body_mass_kg=0.518496,
+        prismatic_mass_kg=1.0e-6,
+        lid_mass_kg=0.011375,
         static_friction=2.0,
         dynamic_friction=2.0,
         restitution=0.0,
-        lid_joint_lower_limit_deg=0.0,
+        lid_lift_lower_limit_m=0.0,
+        lid_lift_upper_limit_m=0.15,
+        lid_joint_lower_limit_deg=-360.0,
         lid_joint_upper_limit_deg=360.0,
-        lid_joint_break_torque=0.25,
-        lid_joint_break_force=1000.0,
         init_pos=[0.0, 0.2, 0.0],
         init_euler=[90.0, 0.0, 0.0],
     )
