@@ -20,10 +20,10 @@
       "STATIC_COLLIDER": true
     },
     {
-      "path": "/home/zjx/project/benchmark/real_object_data/Shampoo/usda_output/shampoo_press.usda",
-      "ADJUSTED_POS": [3.7, 2.6, 1.1],
-      "ADJUSTED_WXYZ": [0.70710678, 0.70710678, 0.0, 0.0],
-      "SCALE": 0.2
+      "path": "/home/zjx/project/benchmark/real_object_data/Shampoo/sim_ready/Shampoo.usd",
+      "ADJUSTED_POS": [3.5, 2.6, 0.75],
+      "ADJUSTED_WXYZ": [1, 0, 0, 0],
+      "SCALE": 1
     }
   ]
 }

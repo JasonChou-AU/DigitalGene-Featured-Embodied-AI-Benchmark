@@ -47,10 +47,10 @@ class HelloWorld(BaseSample):
         self._object_prim_path_map = {}
 
         self._target_object_id = 3
-        self._target_grasp_id = 0
-        self._pregrasp_offset_m = 0.10
-        self._press_distance_m = 0.10
+        self._target_position = np.array([3.5, 2.6, 1.4], dtype=np.float32)
+        self._press_distance_m = 0.05
         self._press_steps = 80
+        self._press_hold_seconds = 1.0
         self._distance_tolerance_m = 0.025
         self._max_lateral_drift_m = 0.030
 
@@ -145,7 +145,7 @@ class HelloWorld(BaseSample):
     def _report_eval(self):
         metrics = self._press_action.get_press_metrics()
         eval_res = evaluate_press_motion(
-            target_distance_m=self._press_distance_m,
+            target_distance_m=metrics["target_distance_m"],
             actual_distance_m=metrics["actual_distance_m"],
             lateral_drift_m=metrics["lateral_drift_m"],
             distance_tolerance_m=self._distance_tolerance_m,
@@ -170,28 +170,24 @@ class HelloWorld(BaseSample):
             self._settle_counter += 1
             if self._settle_counter < self._settle_steps:
                 return
-            self._state = "PREGRASP_PLAN"
+            self._state = "TARGET_PLAN"
 
-        elif self._state == "PREGRASP_PLAN":
-            ok = self._press_action.plan_pregrasp(
-                shampoo_root_prim_path=self._shampoo_root_path,
-                grasp_id=self._target_grasp_id,
-                pregrasp_offset=self._pregrasp_offset_m,
-            )
+        elif self._state == "TARGET_PLAN":
+            ok = self._press_action.plan_target(target_position=self._target_position)
             if not ok:
-                self._failure_reason = f"pregrasp planning failed: {self._press_action.last_error}"
+                self._failure_reason = f"target planning failed: {self._press_action.last_error}"
                 self._state = "FAILED"
             else:
                 print(
-                    "[STATE] PREGRASP_PLAN ok: "
-                    f"object_id={self._target_object_id}, grasp={self._target_grasp_id}"
+                    "[STATE] TARGET_PLAN ok: "
+                    f"target_position={self._target_position.tolist()}"
                 )
-                self._state = "PREGRASP_EXEC"
+                self._state = "TARGET_EXEC"
 
-        elif self._state == "PREGRASP_EXEC":
+        elif self._state == "TARGET_EXEC":
             if self._press_action.step():
                 if self._press_action.last_error is not None:
-                    self._failure_reason = f"pregrasp execution failed: {self._press_action.last_error}"
+                    self._failure_reason = f"target execution failed: {self._press_action.last_error}"
                     self._state = "FAILED"
                 else:
                     self._state = "HOLD"
@@ -199,7 +195,7 @@ class HelloWorld(BaseSample):
         elif self._state == "HOLD":
             self._hold_counter += 1
             if self._hold_counter == 1:
-                print(f"[STATE] HOLD at pregrasp for {self._hold_steps} steps")
+                print(f"[STATE] HOLD at target for {self._hold_steps} steps")
             if self._hold_counter >= self._hold_steps:
                 self._state = "PRESS_START"
 
@@ -207,7 +203,8 @@ class HelloWorld(BaseSample):
             ok = self._press_action.start_press(
                 press_distance_m=self._press_distance_m,
                 steps=self._press_steps,
-                close_gripper=False,
+                close_gripper=True,
+                hold_seconds=self._press_hold_seconds,
             )
             if not ok:
                 self._failure_reason = f"press setup failed: {self._press_action.last_error}"
@@ -216,7 +213,7 @@ class HelloWorld(BaseSample):
                 self._state = "PRESS_EXEC"
 
         elif self._state == "PRESS_EXEC":
-            if self._press_action.step():
+            if self._press_action.step(step_size=step_size):
                 if self._press_action.last_error is not None:
                     self._failure_reason = f"press execution failed: {self._press_action.last_error}"
                     self._state = "FAILED"

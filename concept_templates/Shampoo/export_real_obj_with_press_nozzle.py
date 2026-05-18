@@ -1,4 +1,3 @@
-import argparse
 import os
 import pickle
 import xml.etree.ElementTree as ET
@@ -17,7 +16,7 @@ except Exception:
 
 
 ROOT_PATH = "/Shampoo"
-LINK_MESHES = {
+REAL_OBJ_MESHES = {
     "Cylindrical_body": "Cylindrical_Body.obj",
     "Regular_nozzle": "Regular_nozzle_0.obj",
     "Regular_nozzle_Head": "Regular_nozzle_1.obj",
@@ -222,9 +221,17 @@ def _apply_rigid_body(prim, mass_kg, linear_damping=None, angular_damping=None):
         prim.CreateAttribute("physics:angularDamping", Sdf.ValueTypeNames.Float).Set(float(angular_damping))
 
 
-def _create_link(stage, link_path, mass_kg, link_name, linear_damping=0.04, angular_damping=0.04):
+def _create_link(
+    stage,
+    link_path,
+    mass_kg,
+    link_name,
+    translate=(0.0, 0.0, 0.0),
+    linear_damping=0.04,
+    angular_damping=0.04,
+):
     link = UsdGeom.Xform.Define(stage, link_path)
-    _set_identity_xform(link)
+    _set_initial_pose(link, translate, (0.0, 0.0, 0.0))
     _apply_rigid_body(
         link.GetPrim(),
         mass_kg=mass_kg,
@@ -295,30 +302,53 @@ def _parse_urdf_joints(urdf_path):
     return joints
 
 
-def _create_fixed_joint(stage, joint_path, parent_path, child_path, spec=None, distance_scale=1.0):
+def _create_fixed_joint(
+    stage,
+    joint_path,
+    parent_path,
+    child_path,
+    spec=None,
+    distance_scale=1.0,
+    local_pos0=None,
+    local_pos1=None,
+):
     joint = UsdPhysics.FixedJoint.Define(stage, joint_path)
     if parent_path is not None:
         joint.CreateBody0Rel().SetTargets([Sdf.Path(parent_path)])
     joint.CreateBody1Rel().SetTargets([Sdf.Path(child_path)])
-    if spec is None:
+    if local_pos0 is not None:
+        joint.CreateLocalPos0Attr().Set(_to_vec3f(local_pos0))
+        joint.CreateLocalRot0Attr().Set(_quatf_from_rpy(spec["rpy"]) if spec is not None else Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+    elif spec is None:
         joint.CreateLocalPos0Attr().Set(_to_vec3f((0.0, 0.0, 0.0)))
         joint.CreateLocalRot0Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
     else:
         joint.CreateLocalPos0Attr().Set(_to_vec3f(spec["xyz"] * float(distance_scale)))
         joint.CreateLocalRot0Attr().Set(_quatf_from_rpy(spec["rpy"]))
-    joint.CreateLocalPos1Attr().Set(_to_vec3f((0.0, 0.0, 0.0)))
+    joint.CreateLocalPos1Attr().Set(_to_vec3f(local_pos1 if local_pos1 is not None else (0.0, 0.0, 0.0)))
     joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
     joint.CreateCollisionEnabledAttr().Set(False)
     return joint
 
 
-def _create_prismatic_joint(stage, joint_path, parent_path, child_path, spec, distance_scale, limit_scale, drive_damping):
+def _create_prismatic_joint(
+    stage,
+    joint_path,
+    parent_path,
+    child_path,
+    spec,
+    distance_scale,
+    limit_scale,
+    drive_damping,
+    local_pos0=None,
+    local_pos1=None,
+):
     joint = UsdPhysics.PrismaticJoint.Define(stage, joint_path)
     joint.CreateBody0Rel().SetTargets([Sdf.Path(parent_path)])
     joint.CreateBody1Rel().SetTargets([Sdf.Path(child_path)])
     joint.CreateAxisAttr().Set(_axis_token(spec["axis"]))
-    joint.CreateLocalPos0Attr().Set(_to_vec3f(spec["xyz"] * float(distance_scale)))
-    joint.CreateLocalPos1Attr().Set(_to_vec3f((0.0, 0.0, 0.0)))
+    joint.CreateLocalPos0Attr().Set(_to_vec3f(local_pos0 if local_pos0 is not None else spec["xyz"] * float(distance_scale)))
+    joint.CreateLocalPos1Attr().Set(_to_vec3f(local_pos1 if local_pos1 is not None else (0.0, 0.0, 0.0)))
     joint.CreateLocalRot0Attr().Set(_quatf_from_rpy(spec["rpy"]))
     joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
     if spec["lower"] is not None and spec["upper"] is not None:
@@ -335,13 +365,23 @@ def _create_prismatic_joint(stage, joint_path, parent_path, child_path, spec, di
     return joint
 
 
-def _create_revolute_joint(stage, joint_path, parent_path, child_path, spec, distance_scale, drive_damping):
+def _create_revolute_joint(
+    stage,
+    joint_path,
+    parent_path,
+    child_path,
+    spec,
+    distance_scale,
+    drive_damping,
+    local_pos0=None,
+    local_pos1=None,
+):
     joint = UsdPhysics.RevoluteJoint.Define(stage, joint_path)
     joint.CreateBody0Rel().SetTargets([Sdf.Path(parent_path)])
     joint.CreateBody1Rel().SetTargets([Sdf.Path(child_path)])
     joint.CreateAxisAttr().Set(_axis_token(spec["axis"]))
-    joint.CreateLocalPos0Attr().Set(_to_vec3f(spec["xyz"] * float(distance_scale)))
-    joint.CreateLocalPos1Attr().Set(_to_vec3f((0.0, 0.0, 0.0)))
+    joint.CreateLocalPos0Attr().Set(_to_vec3f(local_pos0 if local_pos0 is not None else spec["xyz"] * float(distance_scale)))
+    joint.CreateLocalPos1Attr().Set(_to_vec3f(local_pos1 if local_pos1 is not None else (0.0, 0.0, 0.0)))
     joint.CreateLocalRot0Attr().Set(_quatf_from_rpy(spec["rpy"]))
     joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
     if spec["lower"] is not None and spec["upper"] is not None:
@@ -438,7 +478,52 @@ def _pick_file(base_dir, candidates, pattern):
     return str(matches[0].resolve())
 
 
-def export_press_nozzle_shampoo(
+def _collect_real_obj_paths(segmentation_dir):
+    paths = {}
+    for link_name, obj_name in REAL_OBJ_MESHES.items():
+        obj_path = os.path.join(segmentation_dir, obj_name)
+        if not os.path.exists(obj_path):
+            raise FileNotFoundError(obj_path)
+        paths[link_name] = obj_path
+    return paths
+
+
+def _mesh_centroid(verts):
+    return np.mean(np.asarray(verts, dtype=np.float64), axis=0)
+
+
+def _build_link_origins_unscaled(mesh_data):
+    origins = {
+        "Cylindrical_body": _mesh_centroid(mesh_data["Cylindrical_body"]["verts"]),
+        "Regular_nozzle": _mesh_centroid(mesh_data["Regular_nozzle"]["verts"]),
+        "Regular_nozzle_Head": _mesh_centroid(mesh_data["Regular_nozzle_Head"]["verts"]),
+    }
+    origins["Regular_nozzle_virtual_prismatic"] = origins["Regular_nozzle"].copy()
+    origins["Regular_nozzle_Head_virtual_prismatic"] = origins["Regular_nozzle_Head"].copy()
+    return origins
+
+
+def _joint_anchor_unscaled(spec, parent, child, link_origins_unscaled):
+    child_origin = link_origins_unscaled.get(child)
+    parent_origin = link_origins_unscaled.get(parent)
+    if parent_origin is None:
+        return child_origin.copy() if child_origin is not None else np.zeros((3,), dtype=np.float64)
+    if np.linalg.norm(spec["xyz"]) < 1.0e-10 and child_origin is not None:
+        return child_origin.copy()
+    return parent_origin + np.asarray(spec["xyz"], dtype=np.float64)
+
+
+def _joint_local_positions_scaled(spec, parent, child, link_origins_unscaled, scale_to_meters):
+    anchor = _joint_anchor_unscaled(spec, parent, child, link_origins_unscaled)
+    parent_origin = link_origins_unscaled.get(parent, np.zeros((3,), dtype=np.float64))
+    child_origin = link_origins_unscaled.get(child, np.zeros((3,), dtype=np.float64))
+    return (
+        (anchor - parent_origin) * float(scale_to_meters),
+        (anchor - child_origin) * float(scale_to_meters),
+    )
+
+
+def export_press_nozzle_shampoo_with_real_collision(
     urdf_path,
     segmentation_dir,
     texture_path,
@@ -469,13 +554,26 @@ def export_press_nozzle_shampoo(
     concept_pkl_path = os.path.abspath(concept_pkl_path) if concept_pkl_path is not None else None
     output_usda_path = os.path.abspath(output_usda_path)
     joint_distance_scale = scale_to_meters if joint_distance_scale is None else joint_distance_scale
-    prismatic_limit_scale = scale_to_meters if prismatic_limit_scale is None else prismatic_limit_scale
+    prismatic_limit_scale = 1.0 if prismatic_limit_scale is None else prismatic_limit_scale
 
     for path in [urdf_path, segmentation_dir, texture_path]:
         if not os.path.exists(path):
             raise FileNotFoundError(path)
     if concept_pkl_path is not None and not os.path.exists(concept_pkl_path):
         raise FileNotFoundError(concept_pkl_path)
+
+    real_obj_paths = _collect_real_obj_paths(segmentation_dir)
+    mesh_data = {}
+    for link_name, obj_path in real_obj_paths.items():
+        verts, faces, uvs, face_uvs = _load_obj_vertices_faces_uv(obj_path)
+        mesh_data[link_name] = {
+            "path": obj_path,
+            "verts": verts,
+            "faces": faces,
+            "uvs": uvs,
+            "face_uvs": face_uvs,
+        }
+    link_origins_unscaled = _build_link_origins_unscaled(mesh_data)
 
     os.makedirs(os.path.dirname(output_usda_path), exist_ok=True)
     stage = Usd.Stage.CreateNew(output_usda_path)
@@ -488,6 +586,8 @@ def export_press_nozzle_shampoo(
     UsdPhysics.ArticulationRootAPI.Apply(root.GetPrim())
     root.GetPrim().CreateAttribute("asset:sourceUrdf", Sdf.ValueTypeNames.Asset).Set(Sdf.AssetPath(urdf_path))
     root.GetPrim().CreateAttribute("asset:scaleToMeters", Sdf.ValueTypeNames.Float).Set(float(scale_to_meters))
+    root.GetPrim().CreateAttribute("asset:prismaticLimitScale", Sdf.ValueTypeNames.Float).Set(float(prismatic_limit_scale))
+    root.GetPrim().CreateAttribute("asset:collisionSource", Sdf.ValueTypeNames.String).Set("segmentation_obj")
 
     UsdGeom.Xform.Define(stage, f"{ROOT_PATH}/links")
     UsdGeom.Xform.Define(stage, f"{ROOT_PATH}/joints")
@@ -513,30 +613,35 @@ def export_press_nozzle_shampoo(
     for link_name, mass in masses.items():
         link_path = f"{ROOT_PATH}/links/{link_name}"
         link_paths[link_name] = link_path
-        _create_link(stage, link_path, mass_kg=mass, link_name=link_name)
+        _create_link(
+            stage,
+            link_path,
+            mass_kg=mass,
+            link_name=link_name,
+            translate=link_origins_unscaled[link_name] * float(scale_to_meters),
+        )
 
     collision_paths = []
-    for link_name, obj_name in LINK_MESHES.items():
-        obj_path = os.path.join(segmentation_dir, obj_name)
-        if not os.path.exists(obj_path):
-            raise FileNotFoundError(obj_path)
-        verts, faces, uvs, face_uvs = _load_obj_vertices_faces_uv(obj_path)
+    for link_name, data in mesh_data.items():
+        obj_path = data["path"]
+        local_verts = data["verts"] - link_origins_unscaled[link_name][None, :]
         visual = _create_mesh(
             stage,
             f"{link_paths[link_name]}/visual",
-            verts,
-            faces,
+            local_verts,
+            data["faces"],
             scale=scale_to_meters,
             collision=False,
-            uvs=uvs,
-            face_uvs=face_uvs,
+            uvs=data["uvs"],
+            face_uvs=data["face_uvs"],
         )
         _bind_visual_material(visual.GetPrim(), visual_mat)
+
         collision = _create_mesh(
             stage,
             f"{link_paths[link_name]}/collision",
-            verts,
-            faces,
+            local_verts,
+            data["faces"],
             scale=scale_to_meters,
             collision=True,
             approximation=collision_approximation,
@@ -544,6 +649,7 @@ def export_press_nozzle_shampoo(
             contact_offset=contact_offset,
             rest_offset=rest_offset,
         )
+        collision.GetPrim().CreateAttribute("asset:sourceObj", Sdf.ValueTypeNames.Asset).Set(Sdf.AssetPath(obj_path))
         collision_paths.append(str(collision.GetPath()))
 
     joints = _parse_urdf_joints(urdf_path)
@@ -557,11 +663,27 @@ def export_press_nozzle_shampoo(
         child_path = link_paths[child]
         parent_path = link_paths.get(parent)
         joint_type = spec["type"]
+        local_pos0, local_pos1 = _joint_local_positions_scaled(
+            spec,
+            parent,
+            child,
+            link_origins_unscaled,
+            scale_to_meters,
+        )
         if joint_type == "fixed":
             if parent == "world" and anchor_body:
                 _create_fixed_joint(stage, joint_path, None, child_path, spec=None)
             else:
-                _create_fixed_joint(stage, joint_path, parent_path, child_path, spec=spec, distance_scale=joint_distance_scale)
+                _create_fixed_joint(
+                    stage,
+                    joint_path,
+                    parent_path,
+                    child_path,
+                    spec=spec,
+                    distance_scale=joint_distance_scale,
+                    local_pos0=local_pos0,
+                    local_pos1=local_pos1,
+                )
         elif joint_type == "prismatic":
             _create_prismatic_joint(
                 stage,
@@ -572,6 +694,8 @@ def export_press_nozzle_shampoo(
                 distance_scale=joint_distance_scale,
                 limit_scale=prismatic_limit_scale,
                 drive_damping=joint_drive_damping,
+                local_pos0=local_pos0,
+                local_pos1=local_pos1,
             )
         elif joint_type in ("revolute", "continuous"):
             _create_revolute_joint(
@@ -582,6 +706,8 @@ def export_press_nozzle_shampoo(
                 spec,
                 distance_scale=joint_distance_scale,
                 drive_damping=joint_drive_damping,
+                local_pos0=local_pos0,
+                local_pos1=local_pos1,
             )
         else:
             raise ValueError(f"unsupported joint type from URDF: {joint_type}")
@@ -599,54 +725,40 @@ def export_press_nozzle_shampoo(
     return output_usda_path
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Export real Shampoo segmented OBJ assets as an articulated USDA.")
-    parser.add_argument("--urdf", default=None, help="Source Shampoo URDF path.")
-    parser.add_argument("--segmentation-dir", default=None, help="Directory containing real segmented Shampoo OBJ files.")
-    parser.add_argument("--texture", default=None, help="Texture image path.")
-    parser.add_argument("--concept-pkl", default=None, help="Conceptualization pickle used for grasp metadata.")
-    parser.add_argument("--output", default=None, help="Output USDA path.")
-    parser.add_argument("--scale-to-meters", type=float, default=0.01, help="Scale applied to OBJ vertices and URDF joint origins.")
-    parser.add_argument(
-        "--prismatic-limit-scale",
-        type=float,
-        default=None,
-        help="Scale applied to URDF prismatic limits. Defaults to --scale-to-meters.",
-    )
-    parser.add_argument("--init-pos", type=float, nargs=3, default=(0.0, 0.0, 0.0), help="Root translation.")
-    parser.add_argument("--init-euler", type=float, nargs=3, default=(0.0, 0.0, 0.0), help="Root XYZ Euler degrees.")
-    parser.add_argument("--no-grasps", action="store_true", help="Skip grasp metadata export.")
-    args = parser.parse_args()
+def export_press_nozzle_shampoo(*args, **kwargs):
+    return export_press_nozzle_shampoo_with_real_collision(*args, **kwargs)
 
+
+def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     repo_root = os.path.abspath(os.path.join(script_dir, "..", ".."))
     data_dir = os.path.join(repo_root, "real_object_data", "Shampoo")
 
-    urdf_path = args.urdf or _pick_file(data_dir, ["sim_ready/Shampoo.urdf"], "**/Shampoo.urdf")
-    segmentation_dir = args.segmentation_dir or os.path.join(data_dir, "segmentation")
-    texture_path = args.texture or _pick_file(
+    urdf_path = _pick_file(data_dir, ["sim_ready/Shampoo.urdf"], "**/Shampoo.urdf")
+    segmentation_dir = os.path.join(data_dir, "segmentation")
+    texture_path = _pick_file(
         data_dir,
         ["textures/texture.jpg", "sim_ready/configuration/materials/textures/material_0.jpeg"],
         "**/*texture*.*",
     )
-    concept_pkl_path = args.concept_pkl or _pick_file(
+    concept_pkl_path = _pick_file(
         data_dir,
         ["conceptualization/conceptualization.pkl"],
         "**/conceptualization/*.pkl",
     )
-    output_path = args.output or os.path.join(data_dir, "usda_output", "shampoo_press_nozzle.usda")
+    output_path = os.path.join(data_dir, "usda_output", "shampoo_press_nozzle_real_collision.usda")
 
-    out = export_press_nozzle_shampoo(
+    out = export_press_nozzle_shampoo_with_real_collision(
         urdf_path=urdf_path,
         segmentation_dir=segmentation_dir,
         texture_path=texture_path,
         concept_pkl_path=concept_pkl_path,
         output_usda_path=output_path,
-        scale_to_meters=args.scale_to_meters,
-        prismatic_limit_scale=args.prismatic_limit_scale,
-        init_pos=args.init_pos,
-        init_euler=args.init_euler,
-        export_grasps=not args.no_grasps,
+        scale_to_meters=0.001,
+        prismatic_limit_scale=None,
+        init_pos=[0.0, 0.0, 0.0],
+        init_euler=[0.0, 0.0, 0.0],
+        export_grasps=True,
     )
     print(f"[OK] exported: {out}")
 

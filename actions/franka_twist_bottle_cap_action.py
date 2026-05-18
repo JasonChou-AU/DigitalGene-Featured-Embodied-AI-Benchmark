@@ -209,7 +209,7 @@ class FrankaTwistBottleCapAction:
 
     def build_ratchet_twist_phases(
         self,
-        total_twist_deg=360.0,
+        total_twist_deg=540.0,
         step_twist_deg=90.0,
     ):
         hand_pos, _, _ = self._get_hand_world_pose()

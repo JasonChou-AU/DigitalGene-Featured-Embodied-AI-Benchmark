@@ -92,6 +92,12 @@ def add_franka_from_config(world, franka_cfg):
     return franka
 
 
+def _make_orient_value(wxyz, orient_attr=None):
+    if orient_attr is not None and orient_attr.IsValid() and str(orient_attr.GetTypeName()) == "quatd":
+        return Gf.Quatd(float(wxyz[0]), float(wxyz[1]), float(wxyz[2]), float(wxyz[3]))
+    return Gf.Quatf(float(wxyz[0]), float(wxyz[1]), float(wxyz[2]), float(wxyz[3]))
+
+
 def import_scene_objects(object_configs):
     stage = omni.usd.get_context().get_stage()
     if stage is None:
@@ -121,7 +127,7 @@ def import_scene_objects(object_configs):
             xformable.AddTranslateOp(precision=UsdGeom.XformOp.PrecisionDouble).Set(translate_val)
 
         orient_attr = obj_prim.GetAttribute("xformOp:orient")
-        orient_val = Gf.Quatf(float(orientation[0]), float(orientation[1]), float(orientation[2]), float(orientation[3]))
+        orient_val = _make_orient_value(orientation, orient_attr)
         if orient_attr.IsValid():
             orient_attr.Set(orient_val)
         else:
@@ -142,6 +148,8 @@ def import_scene_objects(object_configs):
                 scale_attr.Set(scale_val)
             else:
                 xformable.AddScaleOp(precision=UsdGeom.XformOp.PrecisionFloat).Set(scale_val)
+
+        _make_collision_meshes_traversable(stage, prim_path)
 
         if cfg.get("STATIC_COLLIDER", False):
             _force_static_colliders(stage, prim_path)
@@ -198,6 +206,25 @@ def _force_static_colliders(stage, root_prim_path: str):
             collision_api.CreateCollisionEnabledAttr().Set(True)
             mesh_collision_api = UsdPhysics.MeshCollisionAPI.Apply(prim)
             mesh_collision_api.CreateApproximationAttr().Set("convexHull")
+
+
+def _make_collision_meshes_traversable(stage, root_prim_path: str):
+    root = stage.GetPrimAtPath(root_prim_path)
+    if not root.IsValid():
+        return
+
+    for prim in Usd.PrimRange(root):
+        if prim.GetName() == "collisions" and prim.IsInstance():
+            prim.SetInstanceable(False)
+
+    for prim in Usd.PrimRange(root):
+        prim_path = str(prim.GetPath())
+        if "/collisions/" not in prim_path or not prim.IsA(UsdGeom.Mesh):
+            continue
+        collision_api = UsdPhysics.CollisionAPI.Apply(prim)
+        collision_api.CreateCollisionEnabledAttr().Set(True)
+        mesh_collision_api = UsdPhysics.MeshCollisionAPI.Apply(prim)
+        mesh_collision_api.CreateApproximationAttr().Set("convexDecomposition")
 
 
 def setup_scene_from_config(world, scene_config_path, add_franka=True, enable_gpu_dynamics=True):

@@ -50,7 +50,7 @@ class HelloWorld(BaseSample):
         self._target_grasp_id = 5
 
         # Twist config
-        self._target_twist_deg = 360.0
+        self._target_twist_deg = 540.0
         self._twist_step_deg = 90.0
         self._twist_success_deg = 300.0
         self._separation_success_m = 0.04
